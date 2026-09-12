@@ -166,11 +166,107 @@ export async function setDeviceTrigger(page, eventType, enabled = true) {
   return true;
 }
 
+/**
+ * Wait until the plugin's registration is running the build the server serves.
+ *
+ * A changed `sw.js` does not take over by itself: the browser notices on an
+ * update check, installs the new worker and only then activates it. Asking the
+ * registration a question in that window reaches the *previous* build — which is
+ * how a brand-new message type looked like it was being ignored when the old
+ * worker answered what it knew.
+ */
+export async function settlePluginServiceWorker(page) {
+  return page.evaluate(async () => {
+    const find = async () => {
+      const resource = performance.getEntriesByType("resource")
+        .map((entry) => entry.name)
+        .find((name) => /\/_plugins\/[^/]+\/ui\//.test(name));
+      const pluginId = resource ? /\/_plugins\/([^/]+)\/ui\//.exec(resource)[1] : null;
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      const scoped = pluginId
+        ? registrations.filter((item) => item.scope.includes(`/_plugins/${pluginId}/`))
+        : [];
+      return scoped[0] ?? registrations.find((item) => item.scope.includes("/_plugins/")) ?? null;
+    };
+
+    const registration = await find();
+    if (!registration) return false;
+
+    // A changed sw.js only takes over after an update check: without this the
+    // question below reaches the previous build.
+    await registration.update().catch(() => {});
+    const deadline = Date.now() + 20000;
+    while (Date.now() < deadline) {
+      const current = await find();
+      if (!current) return false;
+      if (!current.installing && !current.waiting) return true;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    return true;
+  });
+}
+
+/**
+ * What the plugin's service worker last showed, straight from the worker.
+ *
+ * `getNotifications()` is the obvious probe and the wrong one: in a headless
+ * browser it frequently reports nothing even when the push arrived and the
+ * delivery ledger says `delivered`. The worker itself knows what it displayed, so
+ * ask it — this is the only way to assert on the *text* a real event produced.
+ */
+export async function lastPushedMessage(page) {
+  await settlePluginServiceWorker(page);
+  return page.evaluate(async () => {
+    const resource = performance.getEntriesByType("resource")
+      .map((entry) => entry.name)
+      .find((name) => /\/_plugins\/[^/]+\/ui\//.test(name));
+    const pluginId = resource ? /\/_plugins\/([^/]+)\/ui\//.exec(resource)[1] : null;
+    const registrations = await navigator.serviceWorker.getRegistrations();
+    const scoped = pluginId
+      ? registrations.filter((item) => item.scope.includes(`/_plugins/${pluginId}/`))
+      : [];
+    const registration = scoped[0] ?? registrations.find((item) => item.scope.includes("/_plugins/")) ?? null;
+    if (!registration?.active) return { error: "no active plugin service worker" };
+
+    const reply = await new Promise((resolve) => {
+      const channel = new MessageChannel();
+      const timer = setTimeout(() => resolve({ error: "the worker did not reply" }), 5000);
+      channel.port1.onmessage = (event) => {
+        clearTimeout(timer);
+        resolve(event.data);
+      };
+      registration.active.postMessage({ type: "last-push" }, [channel.port2]);
+    });
+    return reply;
+  });
+}
+
+/** Poll until the worker's last push matches, so a message still in flight is waited for. */
+export async function waitForPushedMessage(page, predicate, timeoutMs = 30000) {
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+  while (Date.now() < deadline) {
+    last = await lastPushedMessage(page);
+    const payload = last?.payload;
+    if (payload && predicate(payload)) return payload;
+    await page.waitForTimeout(750);
+  }
+  return { miss: true, last };
+}
+
 /** Read (and optionally clear) the notifications this origin has shown. */
 export async function readNotifications(page, { clear = false } = {}) {
   return page.evaluate(async (shouldClear) => {
+    const resource = performance.getEntriesByType("resource")
+      .map((entry) => entry.name)
+      .find((name) => /\/_plugins\/[^/]+\/ui\//.test(name));
+    const pluginId = resource ? /\/_plugins\/([^/]+)\/ui\//.exec(resource)[1] : null;
     const registrations = await navigator.serviceWorker.getRegistrations();
-    const pluginRegistration = registrations.find((item) => item.scope.includes("/_plugins/"));
+    const scoped = pluginId
+      ? registrations.filter((item) => item.scope.includes(`/_plugins/${pluginId}/`))
+      : [];
+    const pluginRegistration =
+      scoped[0] ?? registrations.find((item) => item.scope.includes("/_plugins/")) ?? null;
     const notifications = (await pluginRegistration?.getNotifications()) ?? [];
     const mapped = notifications.map((item) => ({
       title: item.title,
@@ -185,8 +281,16 @@ export async function readNotifications(page, { clear = false } = {}) {
 
 export async function currentEndpoint(page) {
   return page.evaluate(async () => {
+    const resource = performance.getEntriesByType("resource")
+      .map((entry) => entry.name)
+      .find((name) => /\/_plugins\/[^/]+\/ui\//.test(name));
+    const pluginId = resource ? /\/_plugins\/([^/]+)\/ui\//.exec(resource)[1] : null;
     const registrations = await navigator.serviceWorker.getRegistrations();
-    const pluginRegistration = registrations.find((item) => item.scope.includes("/_plugins/"));
+    const scoped = pluginId
+      ? registrations.filter((item) => item.scope.includes(`/_plugins/${pluginId}/`))
+      : [];
+    const pluginRegistration =
+      scoped[0] ?? registrations.find((item) => item.scope.includes("/_plugins/")) ?? null;
     const subscription = await pluginRegistration?.pushManager.getSubscription();
     return {
       endpoint: subscription?.endpoint ?? null,

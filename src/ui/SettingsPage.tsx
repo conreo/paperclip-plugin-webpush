@@ -6,11 +6,14 @@ import {
 } from "@paperclipai/plugin-sdk/ui";
 import {
   SAMPLE_AGENT_NAME,
+  hasUnknownPlaceholder,
   previewDefaults,
   renderTemplate,
   sampleTemplateVars,
+  templateObjectsFor,
   type NotifiableEventType,
 } from "../notifications.js";
+import { TemplateEditor } from "./TemplateEditor.js";
 import { usePluginStyles } from "./styles.js";
 
 type EventTypeOption = { type: string; label: string; defaultEnabled: boolean };
@@ -19,9 +22,8 @@ type ClientConfig = {
   vapidPublicKey: string;
   eventTypes: EventTypeOption[];
   notifyUnassignedEvents: boolean;
+  /** The organization's own name: what the built-in wording prefixes, and the preview's sample. */
   organizationName: string | null;
-  includeOrganizationLabel: boolean;
-  includeAgentName: boolean;
   templates: Record<string, NotificationTemplate>;
   throttle: { max: number; windowMinutes: number };
 };
@@ -118,19 +120,13 @@ function Section({
   );
 }
 
-/** A labelled input, matching the host's `Field` (label above, control below). */
-function Field({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
+/** A labelled field for a custom control, which must not be a `<label>` (see the editor). */
+function EditorField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <label className="pcp-field">
+    <div className="pcp-field">
       <span className="pcp-field-label">{label}</span>
       {children}
-    </label>
+    </div>
   );
 }
 
@@ -209,9 +205,6 @@ export function SettingsPage(props: PluginSettingsPageProps) {
 
   const [defaultTriggers, setDefaultTriggers] = useState<string[] | null>(null);
   const [notifyUnassigned, setNotifyUnassigned] = useState<boolean | null>(null);
-  const [organizationLabel, setOrganizationLabel] = useState<string | null>(null);
-  const [includeOrganizationLabel, setIncludeOrganizationLabel] = useState<boolean | null>(null);
-  const [includeAgentName, setIncludeAgentName] = useState<boolean | null>(null);
   const [templates, setTemplates] = useState<Record<string, NotificationTemplate> | null>(null);
   const [saving, setSaving] = useState(false);
   const [configNotice, setConfigNotice] = useState<string | null>(null);
@@ -228,9 +221,6 @@ export function SettingsPage(props: PluginSettingsPageProps) {
       (current) => current ?? config.eventTypes.filter((option) => option.defaultEnabled).map((option) => option.type),
     );
     setNotifyUnassigned((current) => current ?? config.notifyUnassignedEvents);
-    setOrganizationLabel((current) => current ?? config.organizationName ?? "");
-    setIncludeOrganizationLabel((current) => current ?? config.includeOrganizationLabel);
-    setIncludeAgentName((current) => current ?? config.includeAgentName);
     setTemplates((current) => current ?? { ...config.templates });
   }, [config]);
 
@@ -284,9 +274,6 @@ export function SettingsPage(props: PluginSettingsPageProps) {
           configJson: {
             defaultTriggers,
             notifyUnassignedEvents: notifyUnassigned,
-            ...(organizationLabel?.trim() ? { organizationLabel: organizationLabel.trim() } : {}),
-            includeOrganizationLabel: includeOrganizationLabel ?? true,
-            includeAgentName: includeAgentName ?? true,
             templates: prunedTemplates,
           },
         }),
@@ -308,10 +295,7 @@ export function SettingsPage(props: PluginSettingsPageProps) {
     }
   }, [
     defaultTriggers,
-    includeAgentName,
-    includeOrganizationLabel,
     notifyUnassigned,
-    organizationLabel,
     props.context.companyId,
     templates,
   ]);
@@ -338,6 +322,7 @@ export function SettingsPage(props: PluginSettingsPageProps) {
       }
 
       const base = pluginUiBase();
+      await pruneStaleRegistrations(base);
       const registration = await navigator.serviceWorker.register(`${base}sw.js`, { scope: base });
       await waitForActiveWorker(registration);
 
@@ -465,8 +450,7 @@ export function SettingsPage(props: PluginSettingsPageProps) {
   );
 
   const thisBrowserRegistered = devices.some((device) => device.endpoint === currentEndpoint);
-  const effectiveLabel = organizationLabel?.trim() || config?.organizationName || "Your organization";
-  const showLabel = includeOrganizationLabel ?? true;
+  const organizationName = config?.organizationName || "Your organization";
   const eventTypes = config?.eventTypes ?? [];
 
   const toggleDefaultTrigger = (eventType: string) => {
@@ -478,29 +462,45 @@ export function SettingsPage(props: PluginSettingsPageProps) {
     });
   };
 
-  /** A faithful preview of one trigger, rendered with sample placeholder values. */
+  /**
+   * What one trigger will actually send, with sample values in its objects.
+   *
+   * Mirrors `buildNotification` exactly, including the one asymmetry: an empty
+   * field keeps the built-in wording (which the organization name prefixes),
+   * while a field with text is sent verbatim. Otherwise the preview would
+   * promise a prefix that a custom message never gets.
+   */
   const preview = useMemo(() => {
     return (eventType: string) => {
-      // The preview shows what an agent-created event would produce, while the
-      // field placeholders stay generic.
       const defaults = previewDefaults(eventType as NotifiableEventType, { agentName: SAMPLE_AGENT_NAME });
-      const vars = sampleTemplateVars(eventType as NotifiableEventType, effectiveLabel);
+      const vars = sampleTemplateVars(eventType as NotifiableEventType, organizationName);
       const template = templates?.[eventType];
-      const title = template?.title?.trim() ? renderTemplate(template.title, vars) : defaults.title;
-      const body = template?.body?.trim() ? renderTemplate(template.body, vars) : defaults.body;
-      const placesOwnLabel = (template?.title ?? "").includes("{{org}}");
+      const customTitle = template?.title?.trim();
+      const customBody = template?.body?.trim();
       return {
-        title: showLabel && !placesOwnLabel ? `${effectiveLabel} · ${title}` : title,
-        body,
+        title: customTitle
+          ? renderTemplate(customTitle, vars)
+          : `${organizationName} · ${defaults.title}`,
+        body: customBody ? renderTemplate(customBody, vars) : defaults.body,
+        customised: Boolean(customTitle || customBody),
       };
     };
-  }, [effectiveLabel, showLabel, templates]);
+  }, [organizationName, templates]);
 
   const setTemplateField = (eventType: string, field: "title" | "body", value: string) => {
     setTemplates((current) => ({
       ...(current ?? {}),
       [eventType]: { ...(current?.[eventType] ?? {}), [field]: value },
     }));
+  };
+
+  /** Drop a trigger's custom wording, which puts its built-in text back. */
+  const clearTemplate = (eventType: string) => {
+    setTemplates((current) => {
+      const next = { ...(current ?? {}) };
+      delete next[eventType];
+      return next;
+    });
   };
 
   return (
@@ -639,81 +639,75 @@ export function SettingsPage(props: PluginSettingsPageProps) {
 
       <Section label="Notification content" testId="notification-content">
         <p className="pcp-hint">
-          Leave a field empty to keep the wording shown in it. Placeholders work in any field: {"{{org}}"}{" "}
-          {"{{agent}}"} {"{{identifier}}"} {"{{title}}"} {"{{type}}"} {"{{scope}}"} {"{{run}}"} — a placeholder
-          this notification has no value for renders as nothing.
+          Change what a notification says by writing text and dropping objects into it. An object is inserted
+          from the list — never typed — so a message cannot hold a misspelled one, and the preview underneath
+          each trigger is exactly what will arrive. An empty field keeps the built-in wording.
         </p>
 
-        <ToggleField
-          label="Show the organization name"
-          hint="Puts the organization's name in front of notification titles, so you can tell which organization a notification came from."
-          checked={showLabel}
-          disabled={saving}
-          onChange={setIncludeOrganizationLabel}
-          testId="include-org-label"
-        />
-
-        {showLabel ? (
-          // Its own field rather than a footnote to the switch: this is an
-          // override, and the name it overrides is already known.
-          <Field label="Name to show">
-            <input
-              type="text"
-              className="pcp-input"
-              value={organizationLabel ?? ""}
-              placeholder={config?.organizationName ?? "Your organization"}
-              onChange={(event) => setOrganizationLabel(event.target.value)}
-              data-testid="org-label"
-            />
-            <p className="pcp-hint" style={{ marginTop: "0.25rem" }}>
-              Leave empty to use the organization's own name
-              {config?.organizationName ? ` (${config.organizationName})` : ""}.
-            </p>
-          </Field>
-        ) : null}
-
-        <ToggleField
-          label="Include the agent's name"
-          hint="Names the agent in notifications that are about one, such as a failed run or an approval an agent requested."
-          checked={includeAgentName ?? true}
-          disabled={saving}
-          onChange={setIncludeAgentName}
-          testId="include-agent-name"
-        />
-
-        <div className="pcp-section-label">Per notification</div>
-
         {eventTypes.map((option) => {
-          const defaults = previewDefaults(option.type as NotifiableEventType);
+          const defaults = previewDefaults(option.type as NotifiableEventType, { agentName: SAMPLE_AGENT_NAME });
           const shown = preview(option.type);
-          const customised = Boolean(
-            templates?.[option.type]?.title?.trim() || templates?.[option.type]?.body?.trim(),
+          const template = templates?.[option.type];
+          const suspicious = [template?.title, template?.body].some(
+            (text) => text !== undefined && hasUnknownPlaceholder(text),
           );
           return (
-            <div key={option.type} className="pcp-group">
-              <Field label={`${option.label} title`}>
-                <input
-                  type="text"
-                  className="pcp-input"
-                  value={templates?.[option.type]?.title ?? ""}
-                  placeholder={defaults.title}
-                  onChange={(event) => setTemplateField(option.type, "title", event.target.value)}
-                  data-testid={`template-title-${option.type}`}
+            <div key={option.type} className="pcp-trigger" data-testid={`trigger-${option.type}`}>
+              <div className="pcp-toggle-row">
+                <span className="pcp-section-label">{option.label}</span>
+                {shown.customised ? (
+                  <button
+                    type="button"
+                    className="pcp-object-tool pcp-reset"
+                    onClick={() => clearTemplate(option.type)}
+                    disabled={saving}
+                    title="Put the built-in wording back"
+                    data-testid={`reset-${option.type}`}
+                  >
+                    Reset
+                  </button>
+                ) : null}
+              </div>
+
+              {/*
+                Not the `Field` wrapper used elsewhere: that one is a <label>, and
+                a label forwards a click anywhere inside it to its first labelable
+                descendant — which here is the insert button. Clicking the text
+                would open the object list, and the next click would close it.
+              */}
+              <EditorField label="Title">
+                <TemplateEditor
+                  value={template?.title ?? ""}
+                  objects={templateObjectsFor(option.type as NotifiableEventType)}
+                  builtIn={defaults.title}
+                  onChange={(next) => setTemplateField(option.type, "title", next)}
+                  testId={`template-title-${option.type}`}
+                  ariaLabel={`${option.label} notification title`}
                 />
-              </Field>
-              <Field label={`${option.label} body`}>
-                <input
-                  type="text"
-                  className="pcp-input"
-                  value={templates?.[option.type]?.body ?? ""}
-                  placeholder={defaults.body}
-                  onChange={(event) => setTemplateField(option.type, "body", event.target.value)}
-                  data-testid={`template-body-${option.type}`}
+              </EditorField>
+
+              <EditorField label="Body">
+                <TemplateEditor
+                  value={template?.body ?? ""}
+                  objects={templateObjectsFor(option.type as NotifiableEventType)}
+                  builtIn={defaults.body}
+                  onChange={(next) => setTemplateField(option.type, "body", next)}
+                  testId={`template-body-${option.type}`}
+                  ariaLabel={`${option.label} notification body`}
                 />
-              </Field>
-              {customised ? (
+              </EditorField>
+
+              <div className="pcp-preview">
+                <span data-testid={`preview-title-${option.type}`} className="pcp-preview-title">
+                  {shown.title}
+                </span>
+                <span data-testid={`preview-body-${option.type}`}>{shown.body}</span>
+              </div>
+
+              {suspicious ? (
                 <p className="pcp-hint">
-                  As sent: <span className="pcp-strong">{shown.title}</span> — {shown.body}
+                  A {"{{name}}"} that is not in the insert list is not an object, so it arrives as written.
+                  Remove it, or insert the real object.
                 </p>
               ) : null}
             </div>
@@ -802,6 +796,40 @@ export function SettingsPage(props: PluginSettingsPageProps) {
       </p>
     </div>
   );
+}
+
+/**
+ * Remove service workers left behind by an earlier install of this plugin.
+ *
+ * A plugin is served under `/_plugins/<record id>/ui/`, and reinstalling one mints
+ * a new record id — so a browser accumulates registrations for ids that no longer
+ * exist. That is not only clutter: Chrome keeps one push subscription per origin,
+ * attached to the registration that created it, so the orphaned worker keeps
+ * receiving every push while the current one sees nothing. The notification still
+ * appears (the old worker shows it), but anything the current build does with the
+ * push — a deep link that changed, an updated payload field — silently does not
+ * apply.
+ *
+ * Called before registering, so the subscription this page is about to create
+ * belongs to the worker that is actually current. Only the plugin's own scoped
+ * registrations are touched, never the app's root-scoped `/sw.js`.
+ */
+async function pruneStaleRegistrations(currentBase: string): Promise<void> {
+  if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
+
+  for (const registration of await navigator.serviceWorker.getRegistrations()) {
+    if (!registration.scope.includes("/_plugins/")) continue;
+    if (registration.scope.startsWith(currentBase)) continue;
+    try {
+      // Drop the subscription first: it is the origin's only one, and it has to
+      // be released for the new registration to be given its own.
+      const subscription = await registration.pushManager.getSubscription();
+      await subscription?.unsubscribe();
+      await registration.unregister();
+    } catch {
+      // A registration that refuses to go is not a reason to fail the click.
+    }
+  }
 }
 
 /**

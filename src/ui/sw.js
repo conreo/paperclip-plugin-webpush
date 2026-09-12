@@ -12,7 +12,7 @@
  *  - It coexists with that root worker rather than replacing it.
  */
 
-const SW_BUILD_ID = "0.1.0-spike1";
+const SW_BUILD_ID = "0.2.0";
 
 self.addEventListener("install", () => {
   // No precaching to do: this worker is a push receiver, not an offline cache.
@@ -22,6 +22,41 @@ self.addEventListener("install", () => {
 self.addEventListener("activate", (event) => {
   event.waitUntil(self.clients.claim());
 });
+
+/**
+ * The most recent push this worker showed.
+ *
+ * "Did the message I composed actually arrive, and what did it say?" is the one
+ * question a push channel otherwise cannot answer from the app: the notification
+ * lives in the OS, and `getNotifications()` is unreliable in a headless browser.
+ *
+ * Stored in the Cache API rather than in a variable, because the browser stops an
+ * idle service worker after a few tens of seconds — an in-memory record is gone
+ * exactly when someone comes looking for it. This cache is the worker's own, and
+ * the worker registers no `fetch` listener, so it cannot serve anything to the app.
+ */
+const LAST_PUSH_CACHE = "webpush-last-push";
+const LAST_PUSH_KEY = "/last-push";
+
+async function rememberPush(payload) {
+  try {
+    const cache = await caches.open(LAST_PUSH_CACHE);
+    await cache.put(LAST_PUSH_KEY, new Response(JSON.stringify(payload)));
+  } catch {
+    // Best effort: not being able to record a diagnostic must never stop a
+    // notification from being shown.
+  }
+}
+
+async function readLastPush() {
+  try {
+    const cache = await caches.open(LAST_PUSH_CACHE);
+    const response = await cache.match(LAST_PUSH_KEY);
+    return response ? await response.json() : null;
+  } catch {
+    return null;
+  }
+}
 
 self.addEventListener("push", (event) => {
   event.waitUntil(
@@ -34,8 +69,11 @@ self.addEventListener("push", (event) => {
       }
 
       const title = payload.title || "Paperclip";
+      const body = payload.body || "";
+      await rememberPush({ title, body, url: payload.url || "/", tag: payload.tag || null, at: Date.now() });
+
       await self.registration.showNotification(title, {
-        body: payload.body || "",
+        body,
         tag: payload.tag || payload.eventId || undefined,
         data: { url: payload.url || "/" },
         icon: payload.icon || "/android-chrome-192x192.png",
@@ -102,9 +140,20 @@ self.addEventListener("notificationclick", (event) => {
 });
 
 // Lets the settings page ask "is the worker I registered actually ours, and
-// which build is it?" without guessing from a registration object alone.
+// which build is it?" without guessing from a registration object alone, and ask
+// what the last push said. Both answers come back on a port the caller supplies.
 self.addEventListener("message", (event) => {
   const port = event.ports && event.ports[0];
   if (!port) return;
+
+  if (event.data && event.data.type === "last-push") {
+    // Reading is asynchronous, and the message event stays alive until the port
+    // has been answered.
+    event.waitUntil(
+      readLastPush().then((payload) => port.postMessage({ type: "last-push", payload })),
+    );
+    return;
+  }
+
   port.postMessage({ type: "pong", buildId: SW_BUILD_ID, scope: self.registration.scope });
 });

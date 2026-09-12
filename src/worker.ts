@@ -226,14 +226,16 @@ async function fanOut(ctx: PluginContext, db: PluginDb, event: PluginEvent): Pro
   const settings = await companySettings(ctx, event.companyId);
   const config = settings.config;
 
-  // Resolve the agent name only when something will use it: the built-in wording
-  // (the switch) or a template that asks for {{agent}}.
+  // The name is worth resolving only when something will use it: a template does
+  // when it places the {{agent}} object, and the built-in wording always does for
+  // an event about an agent.
   const agentId = agentIdOf(event);
   const templatesUseAgent = Object.values(settings.presentation.templates).some((template) =>
     `${template.title ?? ""}${template.body ?? ""}`.includes("{{agent}}"),
   );
+  const usesBuiltInWording = !settings.presentation.templates[event.eventType];
   const agentNameForEvent =
-    agentId && (settings.presentation.includeAgentName || templatesUseAgent)
+    agentId && (templatesUseAgent || usesBuiltInWording)
       ? await agentName(ctx, event.companyId, agentId)
       : null;
 
@@ -376,8 +378,9 @@ const plugin = definePlugin({
         })),
         notifyUnassignedEvents: config.notifyUnassignedEvents,
         // Notification wording, so the settings page can show and edit what is saved.
+        // The organization's own name is what the built-in wording prefixes, and
+        // what the editor shows in its preview.
         organizationName: settings.presentation.organizationLabel,
-        includeOrganizationLabel: settings.presentation.includeOrganizationLabel,
         templates: settings.presentation.templates,
         throttle: THROTTLE,
       };

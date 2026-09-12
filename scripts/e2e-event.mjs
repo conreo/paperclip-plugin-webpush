@@ -15,7 +15,7 @@ import {
   openSettingsPage,
   readNotifications,
   setDeviceTrigger,
-  waitForNotification,
+  waitForPushedMessage,
 } from "./lib/browser.mjs";
 
 const BASE = process.env.SPIKE_BASE_URL ?? "http://127.0.0.1:3100";
@@ -61,21 +61,42 @@ try {
   issueId = created.id ?? created.issue?.id ?? null;
   console.log(`created issue ${issueId}`);
 
-  const notification = await waitForNotification(page, (item) => item.title.startsWith("New task"));
-  if (!notification) {
+  // Assert the *identifier*, not just the trigger's generic prefix: the built-in
+  // wording falls back to "New task", so a check that only matched "New task..."
+  // passed while every field taken from the activity detail was silently empty.
+  // The built-in wording is prefixed with the organization's name, so match the
+  // part that proves the event's own data resolved.
+  const identifier = created.identifier ?? null;
+  const expectedTitle = identifier ? `New task ${identifier}` : null;
+  console.log(`expecting a title ending ${JSON.stringify(expectedTitle)}`);
+
+  const pushed = await waitForPushedMessage(
+    page,
+    (payload) =>
+      expectedTitle ? payload.title.endsWith(expectedTitle) : payload.title.startsWith("New task"),
+    90000,
+  );
+  if (pushed.miss) {
     const miss = await explainMiss(page);
     console.log(`NO NOTIFICATION FOR THE CREATED ISSUE — ${miss.hint}`);
+    console.log(`worker last showed: ${JSON.stringify(pushed.last)}`);
     console.log(miss.panel);
     process.exitCode = 1;
   } else {
     console.log("=== notification from a real board event ===");
-    console.log(JSON.stringify(notification, null, 2));
+    console.log(JSON.stringify(pushed, null, 2));
     const expected = `/${PREFIX}/issues/${issueId}`;
     console.log(
-      notification.url === expected
-        ? `deep link correct: ${notification.url}`
-        : `deep link mismatch: got ${notification.url}, expected ${expected}`,
+      pushed.url === expected
+        ? `deep link correct: ${pushed.url}`
+        : `deep link mismatch: got ${pushed.url}, expected ${expected}`,
     );
+    console.log(
+      pushed.body === title
+        ? `PASS: the notification carries the task title → ${JSON.stringify(pushed.body)}`
+        : `FAIL: body is ${JSON.stringify(pushed.body)}, expected ${JSON.stringify(title)}`,
+    );
+    if (pushed.body !== title) process.exitCode = 1;
   }
 } finally {
   if (issueId) {

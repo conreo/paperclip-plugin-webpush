@@ -52,10 +52,18 @@ const PAIRS = {
     plugin: ".pcp-field-label",
     props: TEXT_PROPS,
   },
-  "text input": {
+  // The editor's text is the host's field text; its shell is the host's field
+  // border. Padding is compared on the shell only in the vertical axis, because
+  // the insert button occupies the right-hand side.
+  "field text (editor)": {
     host: "div.max-w-2xl input[type='text'].border-border",
-    plugin: ".pcp-input",
-    props: CONTROL_PROPS,
+    plugin: ".pcp-editor-field",
+    props: ["font-size", "line-height", "font-weight", "color"],
+  },
+  "field shell (editor)": {
+    host: "div.max-w-2xl input[type='text'].border-border",
+    plugin: ".pcp-editor",
+    props: ["border-color", "border-width", "border-radius", "background-color"],
   },
   "sm button (destructive)": {
     host: "button[data-size='sm'][data-variant='destructive']",
@@ -80,7 +88,8 @@ const TOKENS = [
   { plugin: ".pcp-btn", property: "color", token: "--primary-foreground" },
   { plugin: ".pcp-btn-outline", property: "background-color", token: "--background" },
   { plugin: ".pcp-btn-destructive", property: "background-color", token: "--destructive" },
-  { plugin: ".pcp-input", property: "border-color", token: "--border" },
+  { plugin: ".pcp-editor", property: "border-color", token: "--border" },
+  { plugin: ".pcp-object", property: "background-color", token: null },
   { plugin: ".pcp-card", property: "background-color", token: "--card" },
   { plugin: ".pcp-card", property: "border-color", token: "--border" },
   { plugin: ".pcp-switch[aria-checked='true']", property: "background-color", token: "--status-task-done" },

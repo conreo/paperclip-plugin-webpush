@@ -56,36 +56,14 @@ export const PLUGIN_STYLES = `
   background: var(--card); color: var(--card-foreground);
   border: 1px solid var(--border); border-radius: var(--radius-lg);
 }
-.pcp-danger {
-  display: grid; gap: 0.75rem;
-  padding: 1rem;
-  background: color-mix(in oklab, var(--destructive) 5%, transparent);
-}
 .pcp-hint { margin: 0; font-size: 0.75rem; line-height: 1rem; color: var(--muted-foreground); }
 .pcp-note { margin: 0; font-size: 0.875rem; line-height: 1.25rem; color: var(--muted-foreground); }
 .pcp-mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.75rem; line-height: 1rem; color: var(--muted-foreground);
 }
-.pcp-strong { color: var(--foreground); font-weight: 600; }
 .pcp-error { font-size: 0.75rem; line-height: 1rem; color: var(--destructive); white-space: pre-wrap; }
 .pcp-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.25rem; }
-
-.pcp-input {
-  width: 100%; min-width: 0;
-  padding: 0.375rem 0.625rem;
-  font-family: inherit; font-size: 0.875rem; line-height: 1.25rem; color: var(--foreground);
-  background: transparent;
-  border: 1px solid var(--border); border-radius: var(--radius-md);
-  outline: none;
-  transition: border-color 120ms, box-shadow 120ms;
-}
-.pcp-input::placeholder { color: var(--muted-foreground); }
-.pcp-input:focus-visible {
-  border-color: var(--ring);
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 50%, transparent);
-}
-.pcp-input:disabled { cursor: not-allowed; opacity: 0.5; }
 
 .pcp-btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 0.375rem;
@@ -162,6 +140,122 @@ export const PLUGIN_STYLES = `
 }
 .pcp-switch[aria-checked="true"] .pcp-switch-thumb { translate: 1rem 0; }
 .dark .pcp-switch-thumb { background: var(--foreground); }
+
+/*
+ * One trigger's editor: its label, its two fields, and the preview of what will
+ * actually be sent. A hairline between triggers keeps a long list readable
+ * without boxing every entry.
+ */
+.pcp-trigger { display: grid; gap: 0.5rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+.pcp-trigger:first-of-type { padding-top: 0; border-top: 0; }
+
+/*
+ * A message field. The editable region and the insert button share one bordered
+ * shell so the field reads as a single control, and :empty is what shows the
+ * built-in wording — no placeholder node is ever inserted, which is what keeps
+ * an empty field genuinely empty.
+ */
+.pcp-editor {
+  position: relative; display: flex; align-items: flex-start; gap: 0.25rem;
+  padding: 0.375rem 0.375rem 0.375rem 0.625rem;
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  background: transparent;
+  transition: border-color 120ms, box-shadow 120ms;
+}
+.pcp-editor:focus-within {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 50%, transparent);
+}
+.pcp-editor-field {
+  flex: 1 1 auto; min-width: 0; min-height: 1.25rem;
+  padding: 0;
+  font-size: 0.875rem; line-height: 1.25rem; color: var(--foreground);
+  white-space: pre-wrap; word-break: break-word;
+  outline: none;
+}
+.pcp-editor-field:empty::before {
+  content: attr(data-placeholder);
+  color: var(--muted-foreground);
+}
+
+/* An object is atomic: not editable, removable, and movable in one click. */
+.pcp-object {
+  display: inline-flex; align-items: center;
+  margin: 0 0.125rem;
+  padding: 0 0.125rem 0 0.25rem;
+  border-radius: 0.25rem;
+  background: color-mix(in oklab, var(--primary) 12%, transparent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem; line-height: 1.125rem;
+  color: var(--foreground);
+  user-select: none;
+  vertical-align: baseline;
+}
+.pcp-object-tools {
+  display: inline-flex; align-items: center;
+  margin-left: 0.0625rem;
+  opacity: 0;
+  transition: opacity 120ms;
+}
+.pcp-object:hover .pcp-object-tools,
+.pcp-object:focus-within .pcp-object-tools { opacity: 1; }
+.pcp-object-tool {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 1rem; height: 1rem; padding: 0;
+  border: 0; border-radius: 0.1875rem;
+  background: transparent; color: var(--muted-foreground);
+  font-family: inherit; font-size: 0.75rem; line-height: 1;
+  cursor: pointer;
+}
+.pcp-object-tool:hover { background: var(--accent); color: var(--accent-foreground); }
+
+.pcp-insert { position: relative; flex: 0 0 auto; }
+.pcp-insert-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 1.5rem; height: 1.25rem; padding: 0;
+  border: 0; border-radius: 0.25rem;
+  background: transparent; color: var(--muted-foreground);
+  cursor: pointer;
+}
+.pcp-insert-btn svg { width: 0.875rem; height: 0.875rem; }
+.pcp-insert-btn:hover { background: var(--accent); color: var(--accent-foreground); }
+.pcp-insert-menu {
+  position: absolute; right: 0; top: calc(100% + 0.25rem); z-index: 20;
+  display: grid; gap: 0.125rem; min-width: 16rem; padding: 0.25rem;
+  background: var(--popover, var(--card));
+  color: var(--popover-foreground, var(--card-foreground));
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.18);
+}
+.pcp-insert-item {
+  display: grid; gap: 0.125rem; padding: 0.375rem 0.5rem;
+  border: 0; border-radius: 0.25rem;
+  background: transparent; color: inherit;
+  font-family: inherit; text-align: left; cursor: pointer;
+}
+.pcp-insert-item:hover { background: var(--accent); color: var(--accent-foreground); }
+.pcp-insert-item strong {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem; font-weight: 500;
+}
+.pcp-insert-item span { font-size: 0.75rem; line-height: 1rem; color: var(--muted-foreground); }
+
+/* "Reset" is a word, not a one-character icon, so it sizes as a small text button. */
+.pcp-reset {
+  width: auto; height: 1.25rem;
+  padding: 0 0.375rem;
+  font-family: inherit; font-size: 0.75rem; line-height: 1;
+}
+
+/* The preview is the promise: this is the text that will arrive. */
+.pcp-preview {
+  display: grid; gap: 0.125rem;
+  padding: 0.5rem 0.625rem;
+  border-radius: var(--radius-md);
+  background: color-mix(in oklab, var(--muted-foreground) 8%, transparent);
+  font-size: 0.75rem; line-height: 1rem; color: var(--muted-foreground);
+}
+.pcp-preview-title { color: var(--foreground); font-weight: 500; }
 `;
 
 /**

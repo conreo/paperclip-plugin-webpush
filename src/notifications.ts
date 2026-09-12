@@ -130,13 +130,18 @@ export function previewDefaults(
 /** Operator-supplied text for one trigger. Missing parts keep the built-in wording. */
 export type NotificationTemplate = { title?: string; body?: string };
 
-/** How notification text should be rendered for a company. */
+/**
+ * How notification text should be rendered for a company.
+ *
+ * There is no longer a switch for the organization name or the agent name. Both
+ * are *objects* an operator places in the text (see `TEMPLATE_OBJECTS`), so a
+ * custom message reads exactly as written — and the built-in wording keeps the
+ * organization prefix and the agent's name so nothing regresses for an operator
+ * who never opens the editor.
+ */
 export type NotificationPresentation = {
-  /** Name to show for the organization; defaults to the company's own name. */
+  /** The organization's own name, used to prefix the built-in wording. */
   organizationLabel: string | null;
-  includeOrganizationLabel: boolean;
-  /** Enrich the built-in wording with the acting agent's name where one applies. */
-  includeAgentName: boolean;
   templates: Record<string, NotificationTemplate>;
 };
 
@@ -147,10 +152,34 @@ export type NotificationEventContext = {
 };
 
 /**
- * Placeholders each trigger offers, for the settings page to document and to
- * preview. Every trigger also has `org`.
+ * Every object an operator can place in a message.
+ *
+ * These are the only names the renderer treats as substitutions, so the editor
+ * offers exactly this list as insertable objects and a message can never hold a
+ * misspelled one. `org` and `agent` apply to every trigger; the rest come from
+ * the event and are listed per trigger in `TEMPLATE_PLACEHOLDERS`.
  */
-export const TEMPLATE_PLACEHOLDERS: Record<NotifiableEventType, string[]> = {
+export const TEMPLATE_OBJECTS = ["org", "agent", "identifier", "title", "type", "scope", "run"] as const;
+export type TemplateObject = (typeof TEMPLATE_OBJECTS)[number];
+
+/** What each object puts into a message. Shown in the editor's insert list. */
+export const TEMPLATE_OBJECT_HINTS: Record<TemplateObject, string> = {
+  org: "The organization's name.",
+  agent: "The agent the event is about, when it is about one.",
+  identifier: "The task's short identifier, such as ACME-42.",
+  title: "The task's title.",
+  type: "What is being approved, such as “hire agent”.",
+  scope: "The budget's scope, such as “monthly”.",
+  run: "The short id of the run that failed.",
+};
+
+/**
+ * The objects each trigger actually has a value for.
+ *
+ * Every trigger also has `org` and `agent`. An object outside this list renders
+ * as nothing, which is why the editor only offers these.
+ */
+export const TEMPLATE_PLACEHOLDERS: Record<NotifiableEventType, TemplateObject[]> = {
   "decision.created": [],
   "decision.expired": [],
   "approval.created": ["type"],
@@ -160,7 +189,75 @@ export const TEMPLATE_PLACEHOLDERS: Record<NotifiableEventType, string[]> = {
   "issue.created": ["identifier", "title"],
 };
 
-/** The agent name the settings page uses to demonstrate placeholders. */
+/** The objects to offer for one trigger, in the order the editor lists them. */
+export function templateObjectsFor(eventType: NotifiableEventType): TemplateObject[] {
+  const shared: TemplateObject[] = ["org", "agent"];
+  return [...shared, ...TEMPLATE_PLACEHOLDERS[eventType]];
+}
+
+/** One piece of a message: literal text, or an object that renders to a value. */
+export type TemplateSegment =
+  | { kind: "text"; value: string }
+  | { kind: "object"; name: TemplateObject };
+
+/** `{{name}}` as an operator might type it by hand. */
+const PLACEHOLDER_PATTERN = /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g;
+
+/** Whether a name is one of the insertable objects. */
+export function isTemplateObject(name: string): name is TemplateObject {
+  return (TEMPLATE_OBJECTS as readonly string[]).includes(name);
+}
+
+/**
+ * Split stored template text into text and object pieces.
+ *
+ * A name that is not an object stays text, so a hand-written `{{foo}}` survives
+ * a round trip through the editor instead of being silently dropped; the
+ * preview then shows the literal text an operator would receive.
+ */
+export function parseTemplate(template: string): TemplateSegment[] {
+  const segments: TemplateSegment[] = [];
+  let cursor = 0;
+
+  for (const match of template.matchAll(PLACEHOLDER_PATTERN)) {
+    const index = match.index ?? 0;
+    if (index > cursor) segments.push({ kind: "text", value: template.slice(cursor, index) });
+    const name = match[1];
+    if (isTemplateObject(name)) segments.push({ kind: "object", name });
+    else segments.push({ kind: "text", value: match[0] });
+    cursor = index + match[0].length;
+  }
+
+  if (cursor < template.length) segments.push({ kind: "text", value: template.slice(cursor) });
+  return segments;
+}
+
+/** The inverse of `parseTemplate`, and the only shape the editor ever saves. */
+export function serializeTemplate(segments: readonly TemplateSegment[]): string {
+  return segments
+    .map((segment) => (segment.kind === "object" ? `{{${segment.name}}}` : segment.value))
+    .join("");
+}
+
+/**
+ * Rewrite hand-typed objects as objects.
+ *
+ * Applied when a field loses focus, never while typing: converting mid-keystroke
+ * would move the caret. After this, `Hello {{org}}` typed by hand is the same
+ * message as one composed from the insert list.
+ */
+export function normalizeTemplate(template: string): string {
+  return serializeTemplate(parseTemplate(template));
+}
+
+/** True when text holds a `{{name}}` that is not an object (so it renders literally). */
+export function hasUnknownPlaceholder(template: string): boolean {
+  return parseTemplate(template).some(
+    (segment) => segment.kind === "text" && /\{\{\s*[a-zA-Z0-9_]+\s*\}\}/.test(segment.value),
+  );
+}
+
+/** The agent name the settings page uses to demonstrate objects. */
 export const SAMPLE_AGENT_NAME = "CodexCoder";
 
 /** Sample values so the settings page can render a faithful preview. */
@@ -199,18 +296,7 @@ export function resolvePresentation(
     if (title || body) templates[eventType] = { title, body };
   }
 
-  const label =
-    typeof config.organizationLabel === "string" && config.organizationLabel.trim()
-      ? config.organizationLabel.trim()
-      : organizationName;
-
-  return {
-    organizationLabel: label,
-    includeOrganizationLabel:
-      typeof config.includeOrganizationLabel === "boolean" ? config.includeOrganizationLabel : true,
-    includeAgentName: typeof config.includeAgentName === "boolean" ? config.includeAgentName : true,
-    templates,
-  };
+  return { organizationLabel: organizationName, templates };
 }
 
 /**
@@ -229,6 +315,25 @@ export function renderTemplate(template: string, vars: Record<string, string | n
     if (typeof value === "string" && value.length > 0) return value;
     return value === null ? "" : match;
   });
+}
+
+/**
+ * Read one event field, wherever the host put it.
+ *
+ * The activity details arrive **spread flat onto the payload**
+ * (`{ ...redactedDetails, agentId, runId, responsibleUserId }` in the host's
+ * `persistActivity`), not nested under `details`. Reading `payload.details.type`
+ * therefore always missed, and every object that comes from an activity detail —
+ * the approval type, the task identifier and title, the budget scope — silently
+ * fell back to its generic wording in real notifications while the settings
+ * preview (which fills objects with samples) showed a value.
+ *
+ * The nested form is still checked second: it costs nothing and keeps the wording
+ * working if a host ever nests them.
+ */
+function payloadField(payload: Record<string, unknown>, name: string): unknown {
+  if (payload[name] !== undefined) return payload[name];
+  return asRecord(payload.details)[name];
 }
 
 type Draft = {
@@ -271,8 +376,9 @@ function draftFor(
         vars: {},
       };
     case "approval.created": {
-      const approvalType = typeof details.type === "string" ? details.type : "request";
-      const readable = approvalType.replaceAll("_", " ");
+      const approvalType = payloadField(payload, "type");
+      const readable = typeof approvalType === "string" ? approvalType.replaceAll("_", " ") : "request";
+
       return {
         title: "Approval needed",
         body: agentName
@@ -283,7 +389,8 @@ function draftFor(
       };
     }
     case "issue.assignment_wakeup_requested": {
-      const identifier = typeof details.identifier === "string" ? details.identifier : null;
+      const identifierValue = payloadField(payload, "identifier");
+      const identifier = typeof identifierValue === "string" ? identifierValue : null;
       return {
         title: "Task assigned",
         body: identifier ? `${identifier} is waiting on you.` : "A task is waiting on you.",
@@ -304,7 +411,8 @@ function draftFor(
       };
     }
     case "budget.incident.opened": {
-      const scope = typeof details.scope === "string" ? details.scope : "budget";
+      const scopeValue = payloadField(payload, "scope");
+      const scope = typeof scopeValue === "string" ? scopeValue : "budget";
       const readable = scope.replaceAll("_", " ");
       return {
         title: "Budget threshold crossed",
@@ -314,8 +422,10 @@ function draftFor(
       };
     }
     case "issue.created": {
-      const identifier = typeof details.identifier === "string" ? details.identifier : null;
-      const issueTitle = typeof details.title === "string" ? details.title : null;
+      const identifierValue = payloadField(payload, "identifier");
+      const identifier = typeof identifierValue === "string" ? identifierValue : null;
+      const titleValue = payloadField(payload, "title");
+      const issueTitle = typeof titleValue === "string" ? titleValue : null;
       return {
         title: identifier ? `New task ${identifier}` : "New task",
         body: issueTitle ?? "A task was created.",
@@ -349,18 +459,10 @@ export function buildNotification(
   const eventType: string = event.eventType;
   if (!isNotifiableEventType(eventType)) return null;
 
-  const draft = draftFor(
-    event,
-    companyPrefix,
-    eventType,
-    presentation?.includeAgentName === false ? {} : (context ?? {}),
-  );
+  const draft = draftFor(event, companyPrefix, eventType, context ?? {});
   const template = presentation?.templates[eventType];
   const vars: Record<string, string | null | undefined> = {
     ...draft.vars,
-    // The placeholder is always available, whatever the switch says: the switch
-    // only decides whether the *built-in* wording uses the name. A template that
-    // asks for {{agent}} gets it either way.
     agent: context?.agentName ?? draft.vars.agent ?? null,
     org: presentation?.organizationLabel ?? null,
   };
@@ -368,10 +470,10 @@ export function buildNotification(
   let title = template?.title ? renderTemplate(template.title, vars) : draft.title;
   const body = template?.body ? renderTemplate(template.body, vars) : draft.body;
 
-  // The label is prefixed automatically unless the operator already placed
-  // `{{org}}` themselves, so a custom title never ends up with it twice.
-  const placesItsOwnLabel = (template?.title ?? "").includes("{{org}}");
-  if (presentation?.includeOrganizationLabel && presentation.organizationLabel && !placesItsOwnLabel) {
+  // A custom title is sent exactly as written — the editor shows what will
+  // arrive — so the organization is prefixed only to the built-in wording.
+  // An operator who wants the name places the object themselves.
+  if (!template?.title && presentation?.organizationLabel) {
     title = `${presentation.organizationLabel} · ${title}`;
   }
 

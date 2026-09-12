@@ -29,6 +29,21 @@ describe("plugin stylesheet", () => {
     expect(missing).toEqual([]);
   });
 
+  it("defines nothing the UI no longer uses", () => {
+    // The reverse direction: when the editor replaced the page's text inputs,
+    // the `.pcp-input` rules were left behind pointing at nothing. Dead CSS is
+    // how a stylesheet drifts away from what is on screen.
+    const sources = ["SettingsPage.tsx", "TemplateEditor.tsx", "FullscreenButton.tsx"]
+      .map((name) => readFileSync(`${uiDir}${name}`, "utf8"))
+      .join("\n");
+
+    const defined = new Set(
+      [...PLUGIN_STYLES.matchAll(/\.(pcp-[a-z0-9-]+)/g)].map((match) => match[1]),
+    );
+    const unused = [...defined].filter((name) => !sources.includes(name));
+    expect(unused).toEqual([]);
+  });
+
   it("draws the host's switch: green capsule with an oblong thumb", () => {
     // Values taken from the host's ToggleSwitch; the previous hand-rolled pill
     // was the app's second switch implementation, which this replaces.
@@ -50,7 +65,7 @@ describe("plugin stylesheet", () => {
     for (const rule of [
       /\.pcp-hint\s*\{[^}]*font-size:\s*0\.75rem; line-height:\s*1rem/,
       /\.pcp-field-label\s*\{[^}]*font-size:\s*0\.75rem; line-height:\s*1rem/,
-      /\.pcp-input\s*\{[^}]*font-size:\s*0\.875rem; line-height:\s*1\.25rem/,
+      /\.pcp-editor-field\s*\{[^}]*font-size:\s*0\.875rem; line-height:\s*1\.25rem/,
       /\.pcp-btn\s*\{[^}]*font-size:\s*0\.875rem; line-height:\s*1\.25rem/,
     ]) {
       expect(PLUGIN_STYLES).toMatch(rule);

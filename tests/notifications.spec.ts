@@ -2,16 +2,23 @@ import { describe, expect, it } from "vitest";
 import type { PluginEvent } from "@paperclipai/plugin-sdk";
 import {
   DEFAULT_EVENT_TYPES,
+  TEMPLATE_OBJECTS,
+  TEMPLATE_OBJECT_HINTS,
   activeUserMemberIds,
   NOTIFIABLE_EVENT_TYPES,
   buildNotification,
+  hasUnknownPlaceholder,
+  normalizeTemplate,
+  parseTemplate,
   previewDefaults,
   renderTemplate,
   resolvePluginConfig,
   resolvePresentation,
   resolveVapidSubject,
   planDelivery,
+  serializeTemplate,
   shouldThrottle,
+  templateObjectsFor,
   type SubscriptionTarget,
 } from "../src/notifications.js";
 
@@ -314,19 +321,17 @@ describe("renderTemplate", () => {
 });
 
 describe("resolvePresentation", () => {
-  it("defaults to the organization name and to showing it", () => {
+  it("defaults to the organization's own name", () => {
     const presentation = resolvePresentation(null, "Acme");
-    expect(presentation).toMatchObject({ organizationLabel: "Acme", includeOrganizationLabel: true });
+    expect(presentation).toMatchObject({ organizationLabel: "Acme" });
     expect(presentation.templates).toEqual({});
   });
 
-  it("prefers a configured label and honours the toggle", () => {
-    const presentation = resolvePresentation(
-      { organizationLabel: "  Acme Ops  ", includeOrganizationLabel: false },
-      "Acme",
-    );
-    expect(presentation.organizationLabel).toBe("Acme Ops");
-    expect(presentation.includeOrganizationLabel).toBe(false);
+  it("uses the organization's own name, ignoring a leftover override", () => {
+    // The override field is gone: an organization is named by its own name, and a
+    // config written by an older version must not keep renaming it.
+    const presentation = resolvePresentation({ organizationLabel: "  Acme Ops  " }, "Acme");
+    expect(presentation.organizationLabel).toBe("Acme");
   });
 
   it("keeps only usable templates for triggers it can deliver", () => {
@@ -347,16 +352,14 @@ describe("resolvePresentation", () => {
     });
   });
 
-  it("ignores a non-boolean toggle rather than treating words as true", () => {
-    expect(resolvePresentation({ includeOrganizationLabel: "false" }, "Acme").includeOrganizationLabel).toBe(true);
+  it("resolves without a company name at all", () => {
+    expect(resolvePresentation({}, null).organizationLabel).toBeNull();
   });
 });
 
 describe("buildNotification with configured text", () => {
   const presentation = (overrides: Partial<Parameters<typeof buildNotification>[2]> = {}) => ({
     organizationLabel: "Acme",
-    includeOrganizationLabel: true,
-    includeAgentName: true,
     templates: {},
     ...overrides,
   });
@@ -393,9 +396,36 @@ describe("buildNotification with configured text", () => {
     expect(notification?.body).toBe("A request is waiting for a decision.");
   });
 
-  it("can omit the label entirely", () => {
-    const notification = buildNotification(event(), "ACME", presentation({ includeOrganizationLabel: false }));
-    expect(notification?.title).toBe("Approval needed");
+  it("leaves a custom title exactly as written, without the organization prefix", () => {
+    // The editor's preview is the promise: what it shows is what arrives, so a
+    // custom title is never silently prefixed. An operator who wants the name
+    // inserts {{org}}.
+    const notification = buildNotification(
+      event(),
+      "ACME",
+      presentation({ templates: { "approval.created": { title: "Sign this" } } }),
+    );
+    expect(notification?.title).toBe("Sign this");
+
+    const withObject = buildNotification(
+      event(),
+      "ACME",
+      presentation({ templates: { "approval.created": { title: "{{org}}: sign this" } } }),
+    );
+    expect(withObject?.title).toBe("Acme: sign this");
+  });
+
+  it("keeps the objects in the order the operator placed them", () => {
+    const notification = buildNotification(
+      event(),
+      "ACME",
+      presentation({
+        templates: { "approval.created": { title: "{{type}} at {{org}}", body: "{{agent}} → {{org}}" } },
+      }),
+      { agentName: "CodexCoder" },
+    );
+    expect(notification?.title).toBe("request at Acme");
+    expect(notification?.body).toBe("CodexCoder → Acme");
   });
 
   it("names the agent in the wording it is about", () => {
@@ -412,23 +442,11 @@ describe("buildNotification with configured text", () => {
     );
   });
 
-  it("leaves the agent out of the built-in wording when the switch is off", () => {
-    const notification = buildNotification(
-      event({ eventType: "agent.run.failed", entityId: "run-1" }),
-      "ACME",
-      presentation({ includeAgentName: false }),
-      { agentName: "CodexCoder" },
-    );
-    expect(notification?.title).toBe("Acme · Agent run failed");
-  });
-
-  it("still resolves {{agent}} in a template when the switch is off", () => {
-    // The switch governs the built-in wording only; a template that asks for the
-    // name gets it either way.
+  it("resolves {{agent}} in a template", () => {
     const notification = buildNotification(
       event(),
       "ACME",
-      presentation({ includeAgentName: false, templates: { "approval.created": { body: "{{agent}} needs you" } } }),
+      presentation({ templates: { "approval.created": { body: "{{agent}} needs you" } } }),
       { agentName: "CodexCoder" },
     );
     expect(notification?.body).toBe("CodexCoder needs you");
@@ -448,6 +466,110 @@ describe("buildNotification with configured text", () => {
       title: "Approval needed",
       body: "A request is waiting for a decision.",
     });
+  });
+});
+
+describe("where event fields are read from", () => {
+  // The host spreads an activity's details flat onto the plugin event payload
+  // (`{ ...redactedDetails, agentId, runId, responsibleUserId }`), so reading
+  // `payload.details.*` silently missed every field taken from a detail. The
+  // built-in wording fell back to its generic text in real notifications while the
+  // settings preview showed sample values.
+  it("resolves the fields spread flat onto the payload", () => {
+    const created = buildNotification(
+      event({
+        eventType: "issue.created",
+        payload: { identifier: "ACME-42", title: "Ship the release", agentId: null, runId: null },
+      }),
+      "ACME",
+    );
+    expect(created?.title).toBe("New task ACME-42");
+    expect(created?.body).toBe("Ship the release");
+  });
+
+  it("resolves the approval type from the flat payload", () => {
+    const approval = buildNotification(
+      event({ eventType: "approval.created", payload: { type: "hire_agent", issueIds: [] } }),
+      "ACME",
+    );
+    expect(approval?.title).toBe("Approval needed");
+    expect(approval?.body).toBe("A hire agent is waiting for a decision.");
+  });
+
+  it("resolves a template object that only exists in the flat payload", () => {
+    const notification = buildNotification(
+      event({ eventType: "issue.created", payload: { identifier: "ACME-42", title: "Ship the release" } }),
+      "ACME",
+      { organizationLabel: "Acme", templates: { "issue.created": { title: "{{identifier}}: {{title}}" } } },
+    );
+    expect(notification?.title).toBe("ACME-42: Ship the release");
+  });
+
+  it("still reads a nested details object, for a host that nests them", () => {
+    const nested = buildNotification(
+      event({ eventType: "issue.created", payload: { details: { identifier: "ACME-7", title: "Nested" } } }),
+      "ACME",
+    );
+    expect(nested?.title).toBe("New task ACME-7");
+    expect(nested?.body).toBe("Nested");
+  });
+
+  it("falls back to the generic wording when the event carries nothing", () => {
+    const bare = buildNotification(event({ eventType: "issue.created", payload: {} }), "ACME");
+    expect(bare?.title).toBe("New task");
+    expect(bare?.body).toBe("A task was created.");
+  });
+});
+
+describe("template objects", () => {
+  it("round-trips text and objects through parse and serialize", () => {
+    const template = "{{org}} · {{title}} needs you";
+    const segments = parseTemplate(template);
+    expect(segments).toEqual([
+      { kind: "object", name: "org" },
+      { kind: "text", value: " · " },
+      { kind: "object", name: "title" },
+      { kind: "text", value: " needs you" },
+    ]);
+    expect(serializeTemplate(segments)).toBe(template);
+  });
+
+  it("keeps a hand-written name that is not an object as literal text", () => {
+    // Silently dropping it would lose what the operator wrote, and it is exactly
+    // what the preview shows arriving.
+    const segments = parseTemplate("{{oops}} is literal");
+    expect(segments).toEqual([
+      { kind: "text", value: "{{oops}}" },
+      { kind: "text", value: " is literal" },
+    ]);
+    expect(serializeTemplate(segments)).toBe("{{oops}} is literal");
+  });
+
+  it("normalises hand-typed objects, spacing included, without touching the rest", () => {
+    expect(normalizeTemplate("hey {{ org }} and {{oops}}")).toBe("hey {{org}} and {{oops}}");
+  });
+
+  it("reports which text holds something that is not an object", () => {
+    expect(hasUnknownPlaceholder("a {{oops}} b")).toBe(true);
+    expect(hasUnknownPlaceholder("a {{org}} b")).toBe(false);
+    expect(hasUnknownPlaceholder("plain text")).toBe(false);
+  });
+
+  it("offers each trigger the objects it actually has, and always org and agent", () => {
+    expect(templateObjectsFor("approval.created")).toEqual(["org", "agent", "type"]);
+    expect(templateObjectsFor("issue.created")).toEqual(["org", "agent", "identifier", "title"]);
+    expect(templateObjectsFor("decision.created")).toEqual(["org", "agent"]);
+  });
+
+  it("describes every object it offers", () => {
+    for (const name of TEMPLATE_OBJECTS) {
+      expect(TEMPLATE_OBJECT_HINTS[name]?.length ?? 0).toBeGreaterThan(0);
+    }
+  });
+
+  it("serialises an empty message to an empty string, which keeps the built-in wording", () => {
+    expect(parseTemplate("")).toEqual([]);
+    expect(serializeTemplate([])).toBe("");
   });
 });
 

@@ -10,7 +10,7 @@ import { DEFAULT_EVENT_TYPES, NOTIFIABLE_EVENT_TYPES } from "./notifications.js"
 const manifest: PaperclipPluginManifestV1 = {
   id: "conreo.webpush",
   apiVersion: 1,
-  version: "0.10.0",
+  version: "0.11.0",
   displayName: "Web Push Notifications",
   description: "Desktop and Android push notifications for Paperclip board events.",
   author: "conreo",
@@ -60,26 +60,6 @@ const manifest: PaperclipPluginManifestV1 = {
         items: { type: "string", enum: [...NOTIFIABLE_EVENT_TYPES] },
         default: [...DEFAULT_EVENT_TYPES],
         uniqueItems: true,
-      },
-      organizationLabel: {
-        type: "string",
-        title: "Organization name in notifications",
-        description:
-          "Shown in notification titles. Leave empty to use the organization's own name.",
-      },
-      includeAgentName: {
-        type: "boolean",
-        title: "Include the agent's name",
-        description:
-          "Name the agent in notifications that are about one, such as a failed run or an approval an agent requested. Applies to every notification type.",
-        default: true,
-      },
-      includeOrganizationLabel: {
-        type: "boolean",
-        title: "Show the organization name",
-        description:
-          "Prefix notification titles with the organization name, so a notification is attributable when several organizations are in play.",
-        default: true,
       },
       templates: {
         type: "object",

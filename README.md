@@ -224,30 +224,45 @@ plugin-owned state, could be written by any board member through a plugin action
 The settings page reads them back through the worker, so a saved change is visible
 immediately and applies to browsers enabled from then on.
 
-**Notification wording** is configurable too, in the same section:
+**Notification wording** is editable in the same section, per trigger: a title and a
+body, each composed of text and **objects**. An empty field keeps the built-in wording,
+which the field shows as its placeholder.
 
-- **Show the organization name** — prefixes notification titles, so a notification is
-  attributable when you follow several organizations. The name is read from the
-  organization; the override field appears beside the switch only when it is on, and
-  exists only for the case where the full company name is too long for a notification.
-- **Include the agent's name** — one switch for every notification type. It names the
-  agent wherever an event is about one, so a failed run reads "<agent> run failed" and
-  an approval an agent requested reads "<agent> requested a hire agent and is waiting
-  for a decision." The agent's display name is resolved from the host, not stored in
-  the event.
-- **Per notification** — a title and a body for each trigger. Empty fields keep the
-  built-in wording, which the settings page shows as the field's placeholder text.
-  The available placeholders are documented once for the whole section, and an
-  "As sent" line appears under a trigger only once you have customised it.
+An object is the value from the event — the organization, the agent, the task
+identifier, the task title, the approval type, the budget scope, the failed run. You do
+not type one: you insert it from the list, and it becomes an atomic chip you can move or
+remove. That is the whole point: a message can never contain a misspelled object, and
+the object list only offers the ones the trigger actually has a value for (`{{type}}`
+exists for approvals, `{{identifier}}` does not).
 
-Placeholders are filled in when the notification is sent: `{{org}}` and `{{agent}}`
-everywhere, plus `{{identifier}}` and `{{title}}` for new tasks, `{{type}}` for
-approvals, `{{scope}}` for budget incidents, and `{{run}}` for failed runs. The
-`{{agent}}` placeholder resolves even when the agent-name switch is off — that switch
-governs the built-in wording only, so a template that asks for the name always gets it. A valid placeholder with no value
-for that event (an approval has no issue identifier) renders as nothing, while an
-unknown name is left verbatim so a typo is visible in the preview. If a custom title
-already places `{{org}}` itself, the automatic prefix is skipped rather than doubled.
+- **Insert** — the `+` at the right of a field lists the objects available to that
+  trigger, with a description of each. The object lands where your cursor was.
+- **Reorder** — the `‹` and `›` on a chip swap it with the neighbouring object, so the
+  words between them stay put: "{{title}} for {{org}}" becomes "{{org}} for {{title}}",
+  not "{{org}}{{title}} for". `×` removes it.
+- **What you see is what is sent** — a preview under each trigger shows the message with
+  its objects filled in, always, not only once you have customised something. Deleting
+  both fields puts the built-in wording back.
+
+Two rules follow from that promise, and both were chosen deliberately:
+
+- **A custom title is never prefixed.** The organization name is prefixed to the *built-in*
+  wording, because that is what an operator who never opens the editor gets. Once you
+  write a title, it is sent exactly as the preview shows it — insert `{{org}}` where you
+  want the name. (An earlier version prefixed custom titles too and skipped the prefix
+  only when it saw `{{org}}` in the text, which made the preview a lie.)
+- **Objects that an event has no value for render as nothing.** An approval has no task
+  identifier, so `{{identifier}}` in an approval's body disappears rather than leaving
+  `{{identifier}}` in a notification somebody reads.
+
+Objects are filled in when the notification is sent: `{{org}}` and `{{agent}}` for every
+trigger, plus `{{identifier}}` and `{{title}}` for new tasks, `{{type}}` for approvals,
+`{{scope}}` for budget incidents, and `{{run}}` for failed runs. The agent's name is
+resolved from the host rather than carried in the event.
+
+There is deliberately no switch for the organization name or the agent's name: both are
+objects now, so a switch would have been a second way to say the same thing, and the one
+that fires behind your back.
 
 The omissions are deliberate rather than unfinished:
 
@@ -355,6 +370,20 @@ limited to that directory. It **coexists** with Paperclip's own root-scoped
 `/sw.js` instead of replacing it, and registers no `fetch` listener, so it cannot
 interfere with the app's offline behaviour.
 
+It also records the last push it showed, in its own Cache API cache, and answers a
+`last-push` message from the settings page. That exists because "did the message I
+composed actually arrive, and what did it say?" is otherwise unanswerable from the app:
+the notification lives in the OS, and `getNotifications()` reports nothing in a headless
+browser even when the delivery succeeded. A variable would not do — the browser stops an
+idle worker after a few tens of seconds, which is exactly when someone goes looking.
+
+Because a plugin is served under `/_plugins/<record id>/ui/`, reinstalling one mints a new
+record id and leaves the previous worker registered. Chrome keeps **one push subscription
+per origin**, attached to the registration that created it, so the orphaned worker would
+keep receiving every push while the current build saw nothing. Enabling notifications
+therefore unregisters this plugin's stale workers (and releases their subscription) before
+registering the current one; the app's root-scoped worker is never touched.
+
 ### Styling
 
 The settings page is meant to be indistinguishable from Paperclip's own Company
@@ -380,6 +409,16 @@ line-height, without which every control is a pixel or two taller than the host'
 `scripts/compare-ui.mjs` verifies this rather than asserting it: it measures the
 host page and the plugin page in the same browser and prints a property-by-property
 diff, including resolving each token through the browser to compare colours.
+
+### Where the values come from
+
+A trigger's wording is built from the event: the activity action names the trigger, and the
+activity's details supply the values its objects can use. The host spreads those details
+**flat onto the plugin event's payload** (`{ ...redactedDetails, agentId, runId,
+responsibleUserId }`), so they are read from the payload root, with a nested `details`
+object accepted as a fallback. Reading only `payload.details.*` is worth knowing about: it
+never misses loudly, it just silently falls back to the generic wording, and the settings
+preview — which fills objects with samples — keeps showing a value.
 
 ### Data
 
@@ -452,6 +491,8 @@ node scripts/e2e-approval.mjs   # creates an approval, expects "Approval needed"
 SPIKE_OTHER_COMPANY_ID=<id> SPIKE_OTHER_PREFIX=<PFX> \
   node scripts/e2e-cross-company.mjs   # an event from a second company reaches a device registered in the first
 node scripts/e2e-config.mjs     # saves organization defaults, reloads, and proves a new browser uses them
+node scripts/e2e-template.mjs   # composes a message from objects, reorders it, saves, reloads, and
+                                # expects a real approval to arrive with exactly that wording
 ```
 
 Overrides: `SPIKE_BASE_URL`, `SPIKE_COMPANY_PREFIX`, `SPIKE_COMPANY_ID`,
@@ -485,7 +526,13 @@ debugging time:
   *Enable* click fail.
 - **Expect the throttle.** More than 12 pushes to one device in 5 minutes are
   suppressed and recorded as `throttled`; `explainMiss()` reports that instead of
-  leaving it looking like a delivery failure.
+  leaving it looking like a delivery failure. Repeated runs against one profile hit this
+  for real, so a check that suddenly sees no push is usually the flood control working:
+  use a fresh `SPIKE_PROFILE_DIR`.
+- **Wait for the worker you mean.** A changed `sw.js` only takes over after an update
+  check, and a reinstall leaves the previous worker registered, so a check has to resolve
+  the registration belonging to the plugin id the page was served from — otherwise it
+  asks a dead build and reads silence as a failure.
 
 ### Publishing
 
