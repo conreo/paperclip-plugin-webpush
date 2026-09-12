@@ -48,26 +48,55 @@ self.addEventListener("push", (event) => {
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const target = (event.notification.data && event.notification.data.url) || "/";
+  const origin = self.location.origin;
+
+  // focus() and openWindow() both need user activation, which a real tap grants.
+  // They can still refuse (a window that cannot be raised, an embedded context),
+  // and a refusal must not end the handler: fall through, so a click always lands.
+  const focusQuietly = async (client) => {
+    try {
+      await client.focus();
+      return true;
+    } catch {
+      return false;
+    }
+  };
 
   event.waitUntil(
     (async () => {
       const clientList = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+      const targetPath = new URL(target, origin).pathname;
 
-      for (const client of clientList) {
-        if (new URL(client.url).pathname === new URL(target, self.location.origin).pathname) {
-          await client.focus();
-          return;
+      // Already showing the destination: raise it rather than opening a duplicate.
+      const sameTarget = clientList.find((client) => {
+        try {
+          return new URL(client.url).pathname === targetPath;
+        } catch {
+          return false;
         }
-      }
+      });
+      if (sameTarget && (await focusQuietly(sameTarget))) return;
 
-      const anyClient = clientList[0];
-      if (anyClient && "navigate" in anyClient && anyClient.url.startsWith(self.location.origin)) {
-        await anyClient.focus();
-        await anyClient.navigate(target);
+      // Reach the destination by opening it.
+      //
+      // This worker is registered under `/_plugins/<id>/ui/`, so it controls no
+      // app window — the app's own root-scoped `/sw.js` does. `WindowClient.
+      // navigate()` therefore rejects with "this service worker is not the
+      // client's active service worker", and focusing a window without navigating
+      // would raise the app at whatever page it was already on. Opening the URL is
+      // the only route that actually arrives at the deep link.
+      try {
+        await self.clients.openWindow(target);
         return;
+      } catch {
+        // No activation, or the browser refused to open a window.
       }
 
-      await self.clients.openWindow(target);
+      // Last resort: raise the app, so the tap still has a visible effect.
+      for (const client of clientList) {
+        if (!client.url.startsWith(origin)) continue;
+        if (await focusQuietly(client)) return;
+      }
     })(),
   );
 });

@@ -69,7 +69,12 @@ export async function enableNotifications(page) {
     .waitForFunction(
       () => {
         const text = document.body.innerText;
-        if (/now registered/.test(text)) return "success";
+        // Wait on state, not on wording: the copy changed once already, and a
+        // helper that greps a sentence fails the whole suite when it does.
+        const registered =
+          /registered/.test(text) ||
+          Boolean(document.querySelector('[data-testid="device-row"][data-device-current="true"]'));
+        if (registered) return "success";
         const failure =
           /Notifications are blocked[^\n]*|Web Push needs[^\n]*|This browser does not support[^\n]*|Registration failed[^\n]*|Plugin configuration is still loading[^\n]*|A signed-in board user[^\n]*|A valid push subscription[^\n]*/.exec(
             text,
