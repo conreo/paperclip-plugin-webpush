@@ -17,10 +17,8 @@
  * Usage: node scripts/compare-ui.mjs
  */
 import { chromium } from "playwright";
+import { companySettingsUrl, pluginSettingsUrl } from "./lib/browser.mjs";
 
-const BASE = process.env.SPIKE_BASE_URL ?? "http://127.0.0.1:3100";
-const PREFIX = process.env.SPIKE_COMPANY_PREFIX ?? "ACME";
-const PLUGIN_ID = process.env.SPIKE_PLUGIN_ID ?? "0fe68a3c-40db-4524-b94f-69ca8fc50231";
 const CHROME = process.env.SPIKE_CHROME_PATH ?? "/opt/google/chrome-canary/google-chrome-canary";
 
 const TEXT_PROPS = ["font-size", "line-height", "font-weight", "letter-spacing", "text-transform", "color"];
@@ -158,7 +156,7 @@ const context = await chromium.launchPersistentContext(".cache/chrome-profile-ve
 });
 const view = context.pages()[0] ?? (await context.newPage());
 
-await view.goto(`${BASE}/${PREFIX}/company/settings`, { waitUntil: "domcontentloaded" });
+await view.goto(companySettingsUrl(), { waitUntil: "domcontentloaded" });
 await view.waitForTimeout(3500);
 const host = await measure(
   view,
@@ -167,9 +165,7 @@ const host = await measure(
   ),
 );
 
-await view.goto(`${BASE}/${PREFIX}/company/settings/instance/plugins/${PLUGIN_ID}`, {
-  waitUntil: "domcontentloaded",
-});
+await view.goto(pluginSettingsUrl(), { waitUntil: "domcontentloaded" });
 await view.locator('[data-testid="enable-notifications"]').waitFor({ timeout: 30000 });
 await view.waitForTimeout(3000);
 const plugin = await measure(

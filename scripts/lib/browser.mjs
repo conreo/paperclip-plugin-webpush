@@ -7,9 +7,28 @@
  * that condition instantly, so a failed registration or an early `enable()`
  * error looked like a delivery bug. Every check here asserts an outcome instead.
  */
+import { execFileSync } from "node:child_process";
 import { chromium } from "playwright";
 
 export const CHROME = process.env.SPIKE_CHROME_PATH ?? "/opt/google/chrome-canary/google-chrome-canary";
+
+/**
+ * The plugin's record id, which every settings URL needs.
+ *
+ * A local reinstall mints a new record, so a pinned default rots silently and
+ * the check then browses a URL that no longer exists. Read what the instance
+ * reports instead; `SPIKE_PLUGIN_ID` still wins when a check targets a specific
+ * install.
+ */
+function pluginRecordId() {
+  if (process.env.SPIKE_PLUGIN_ID) return process.env.SPIKE_PLUGIN_ID;
+  const listing = execFileSync("paperclipai", ["plugin", "list"], { encoding: "utf8" });
+  const match = /key=conreo\.webpush\b[^\n]*\bid=([0-9a-fA-F-]{36})/.exec(listing);
+  if (!match) {
+    throw new Error("Could not find an installed conreo.webpush plugin; set SPIKE_PLUGIN_ID.");
+  }
+  return match[1];
+}
 
 /**
  * A persistent profile is required: Chrome disables the Push API in incognito
@@ -30,8 +49,14 @@ export async function launchProfile(profileName) {
 export function pluginSettingsUrl() {
   const base = process.env.SPIKE_BASE_URL ?? "http://127.0.0.1:3100";
   const prefix = process.env.SPIKE_COMPANY_PREFIX ?? "ACME";
-  const pluginId = process.env.SPIKE_PLUGIN_ID ?? "0fe68a3c-40db-4524-b94f-69ca8fc50231";
-  return `${base}/${prefix}/company/settings/instance/plugins/${pluginId}`;
+  return `${base}/${prefix}/company/settings/instance/plugins/${pluginRecordId()}`;
+}
+
+/** The host page this plugin's settings page is styled to match. */
+export function companySettingsUrl() {
+  const base = process.env.SPIKE_BASE_URL ?? "http://127.0.0.1:3100";
+  const prefix = process.env.SPIKE_COMPANY_PREFIX ?? "ACME";
+  return `${base}/${prefix}/company/settings`;
 }
 
 export async function openSettingsPage(page) {

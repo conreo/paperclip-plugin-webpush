@@ -11,6 +11,15 @@ describe("plugin manifest", () => {
     expect(manifest.id).toMatch(/^[a-z0-9._-]+$/);
   });
 
+  it("keeps its version in step with package.json", () => {
+    // The manifest carries its own version and is what the host reports and
+    // upgrades against, so a package-only bump silently installs the old number.
+    const pkg = JSON.parse(
+      readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"),
+    ) as { version: string };
+    expect(manifest.version).toBe(pkg.version);
+  });
+
   it("declares every capability the worker's host calls need", () => {
     // events.on, ctx.db, ctx.http, ctx.jobs, ctx.state, companies, settings page, secrets.
     for (const capability of [
