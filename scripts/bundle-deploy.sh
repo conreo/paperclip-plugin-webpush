@@ -44,10 +44,17 @@ cat > "$TARGET/package.json" <<'JSON'
 }
 JSON
 
+# The authoring machine's umask must not decide whether the target instance can
+# read the bundle: a 600 package.json installs fine as root and fails as soon as
+# the server runs as a non-root user.
+chmod -R a+rX "$TARGET"
+
 echo "==> installing production dependencies (flat, no symlinks)"
 # A flat tree keeps the copy portable: pnpm's store symlinks would not survive a
 # `docker cp` into an instance that has no matching store.
 (cd "$TARGET" && npm install --omit=dev --no-audit --no-fund)
+
+chmod -R a+rX "$TARGET"
 
 echo
 echo "bundle ready: $TARGET"
