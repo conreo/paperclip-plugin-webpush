@@ -1,22 +1,252 @@
 # Paperclip Web Push Notifications
 
-Desktop and Android push notifications for Paperclip board events, delivered as a
-standalone Paperclip plugin. No changes to Paperclip core, no fork, no image
-rebuild.
+Real desktop and Android notifications for Paperclip, delivered as a standalone
+plugin. No Paperclip fork, no core changes, no image rebuild.
 
-A board operator opens **Settings → Plugins → Web Push Notifications**, clicks
-**Enable notifications**, and from then on their browser receives real OS
-notifications when an approval needs a decision, a task is handed to them, an
-agent run fails, or a budget threshold trips — including while the Paperclip tab
-is closed.
+Someone asks for a decision, an approval lands in your inbox, a task is handed to
+you, or a budget threshold trips — and your computer tells you, even when the
+Paperclip tab is closed.
+
+- **Nothing to configure to start.** The plugin generates its own signing key and
+  registers your browser on one click.
+- **Addressed to people, not companies.** A device registered in one organization
+  still receives what you are responsible for in another.
+- **Quiet by design.** Only attention-worthy events are on by default, at most 12
+  notifications per device per 5 minutes.
+
+---
+
+## Quick start
+
+**1. Install the plugin** (an instance admin, once):
+
+*Paperclip board → **Instance Settings → Plugins → Install*** → enter the package
+name `paperclip-plugin-webpush` → **Install**. That is the whole step.
+
+Or from a terminal:
+
+```bash
+paperclipai auth login --instance-admin --api-base https://paperclip.example.ts.net
+paperclipai plugin install paperclip-plugin-webpush --api-base https://paperclip.example.ts.net
+paperclipai plugin inspect conreo.webpush     # expect status=ready
+```
+
+**2. Turn it on in your browser** (each person, each browser):
+
+*Instance Settings → Plugins → Web Push Notifications* → **Enable notifications**
+→ allow the browser prompt. An **HTTPS** origin is required; `localhost` works for
+testing.
+
+**3. Prove it works:**
+
+Click **Send test notification**. A test notification should appear within a
+second or two. Then do something real — create an approval — and a "Approval
+needed" notification should arrive with a link straight to it.
+
+---
+
+## Install
+
+### Option 1 — npm package (recommended)
+
+The published package is the supported production artifact. The host installs it
+with `npm install`, so dependencies such as `web-push` are fetched for you and no
+`node_modules` has to travel with the plugin.
+
+Requirements on the host: **npm available at runtime** and **network access to the
+registry**. Both are true of the standard Docker image.
+
+Installing from the board needs **instance admin** rights. Installing from the CLI
+needs an instance-admin credential:
+
+```bash
+paperclipai auth login --instance-admin --api-base https://paperclip.example.ts.net
+paperclipai plugin install paperclip-plugin-webpush --api-base https://paperclip.example.ts.net
+```
+
+A plain board login is rejected with *"Instance admin access required"* — that is
+the `assertInstanceAdmin` check on the install route, not a plugin problem.
+
+Where it lands: `~/.paperclip/plugins`, which in the standard container is
+`/paperclip/.paperclip/plugins` — inside the persistent volume, so an npm-installed
+plugin survives container restarts and recreation.
+
+**Update:** install a newer version by name, for example
+`paperclipai plugin install paperclip-plugin-webpush@0.6.0`, or use the board's
+Plugins page. An upgrade that adds capabilities is held as `upgrade_pending` until
+an operator approves the new set.
+
+**Publish your own build** (only if you forked it): see
+[Publishing](#publishing) — npm requires 2FA for publishing, which is the most
+common obstacle.
+
+### Option 2 — local path (private builds, development)
+
+Use this when the code must not leave your machines. The path is read from the
+**server's** filesystem, not the CLI's, so the directory only has to exist inside
+the container.
+
+```bash
+# 1. build the portable artifact (dist/ + migrations/ + a flat node_modules)
+./scripts/bundle-deploy.sh
+#    -> prints an absolute target path, e.g. .../paperclip-plugin-webpush/.cache/deploy-webpush
+
+# 2. copy it to the host, then into the container's persistent volume
+rsync -a --delete <bundle-path>/ <host>:/tmp/webpush/
+ssh <host> 'sudo docker exec <server-container> mkdir -p /paperclip/plugins'
+ssh <host> 'sudo docker cp /tmp/webpush <server-container>:/paperclip/plugins/webpush'
+ssh <host> 'sudo docker exec <server-container> chmod -R a+rX /paperclip/plugins/webpush'
+
+# 3. install it (from anywhere that can reach the instance)
+paperclipai auth login --instance-admin --api-base https://paperclip.example.ts.net
+paperclipai plugin install /paperclip/plugins/webpush --api-base https://paperclip.example.ts.net
+```
+
+Local-path installs are trusted code from disk: the server executes the worker
+directly, so only install a path you built yourself.
+
+Two traps worth knowing:
+
+- **`node_modules` must be shipped** for a local-path install, because `web-push`
+  is resolved at runtime. It cannot be bundled into the worker — bundling it makes
+  the forked worker exit immediately with `Dynamic require of "crypto" is not
+  supported`. `scripts/bundle-deploy.sh` handles this and normalizes permissions,
+  because a hand-copied `package.json` at mode `600` installs fine as root and
+  fails for any other user.
+- **Use the bundle path the script prints.** A stale bundle elsewhere in the tree
+  installs cleanly and silently restores bugs you already fixed.
+
+---
+
+## Turn on notifications
+
+Open **Instance Settings → Plugins → Web Push Notifications**. Prefer that sidebar
+entry over typing a URL: the settings page is addressed by the plugin's **record
+id**, and putting the plugin *key* in the URL renders Paperclip's auto-generated
+configuration form instead — which looks like the plugin has no settings page.
+
+```
+https://<instance>/<companyPrefix>/company/settings/instance/plugins/<pluginRecordId>
+```
+
+`<companyPrefix>` is your company's issue prefix, and the record id is the `id=…`
+shown by `paperclipai plugin inspect conreo.webpush`.
+
+Click **Enable notifications**. The page shows, per device:
+
+- **This browser** versus other devices you registered elsewhere
+- a checkbox per trigger (see the table below)
+- the last five delivery attempts with HTTP status — the honest answer to "why
+  didn't I get that?"
+- **Test this device** and **Remove**
+
+Notifications are delivered by the browser's own push service, to the service
+worker this plugin registers. That is what makes them arrive with the tab closed.
+
+---
+
+## What you get notified about
+
+Defaults are attention-shaped: a push should mean a human is needed. A decision is
+exactly that, so it leads, followed by approvals and assignment wakeups (both
+inbox-addressed) and budget incidents (an operator has to act).
+
+| Trigger | Notification | Default |
+| --- | --- | --- |
+| `decision.created` | "Decision needed" → `/<prefix>/decisions` | on |
+| `approval.created` | "Approval needed" → `/<prefix>/approvals/<id>` | on |
+| `issue.assignment_wakeup_requested` | "Task assigned" → `/<prefix>/issues/<id>` | on |
+| `budget.incident.opened` | "Budget threshold crossed" → `/<prefix>/activity/budgets` | on |
+| `decision.expired` | "Decision overdue" → `/<prefix>/decisions` | off |
+| `agent.run.failed` | "Agent run failed" → `/<prefix>/issues/<id>` | off |
+| `issue.created` | "New task" → `/<prefix>/issues/<id>` | off |
+
+Agent-activity and new-task notifications are opt-in: pushing them by default is
+how a notification channel gets muted.
+
+### Who receives a notification
+
+- **An event that names a responsible user** goes to that user's devices, in
+  **any** company. A device registered while looking at one organization still
+  receives what its owner is responsible for in another, because a device belongs
+  to a person.
+- **An event that names nobody responsible** goes to the devices of that
+  organization's **active human members** who opted into that trigger. Agent
+  members are excluded, as are pending and suspended members. It does not reach
+  other organizations' subscribers.
+- If the host cannot answer the membership question, the plugin falls back to a
+  company-scoped broadcast rather than dropping the notification.
+- Deep links always carry the event's own company prefix, so a notification from
+  one organization opens that organization.
+
+Preferences are per **device**, not per organization: one toggle set and one
+throttle, shared across the organizations you belong to.
+
+### Rate limiting
+
+At most **12 notifications per device per 5 minutes**. Anything beyond that is
+suppressed and recorded as `throttled`, visible per device on the settings page,
+so a burst shows up as a rate limit rather than as silence.
+
+---
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| Test notification never arrives | Permission not granted, or the origin is not a secure context | Check the header line on the settings page: it must say **HTTPS origin** and `permission: granted`. Plain `http://<lan-ip>` origins get no push at all, silently. |
+| Settings page shows the auto-generated form, not this plugin's UI | The URL used the plugin key instead of the record id | Open it from the **Instance Settings → Plugins** sidebar entry, or use the `id=` from `paperclipai plugin inspect conreo.webpush`. |
+| Test works, but approvals never arrive | The device does not want that trigger, or you are not the responsible user | Tick the trigger for that device, and check the company's *default responsible user*. Approvals are targeted at `responsibleUserId`. |
+| Delivery list shows `throttled` | More than 12 pushes to that device in 5 minutes | Wait 5 minutes. This is working as intended. |
+| Delivery list shows `failed` with 400/403 | The subscription was created against a different VAPID keypair (for example after the plugin's namespace was recreated) | **Turn off for this browser**, then **Enable notifications** again to re-subscribe. |
+| Plugin shows `status=error` | Worker failed to start — usually a local-path install without `node_modules` | `paperclipai plugin inspect conreo.webpush` shows `last_error`; reinstall with `scripts/bundle-deploy.sh` output. |
+| Nothing at all, and no device is listed | Nobody has clicked Enable in this browser yet | Do step 2 of the quick start. |
+| Board shows *Instance admin access required* on install | The credential is a plain board login | Re-run `paperclipai auth login --instance-admin`. |
+| iOS: no notifications | Safari only delivers Web Push to a site added to the Home Screen, with a standalone-window manifest | Out of scope: Paperclip ships `display: "browser"`. Desktop and Android are unaffected. |
+
+---
+
+## Verify an installation
+
+Everything here is read-only.
+
+```bash
+# on the instance host: registry row, namespace tables, devices, VAPID keypair, delivery ledger
+ssh <host> 'bash -s' < scripts/verify-install.sh
+
+# the plugin's service worker is served on your real origin (a browser needs this to register it)
+curl -sI https://<instance>/_plugins/<pluginRecordId>/ui/sw.js | head -3
+#  expect: 200, content-type: application/javascript; charset=utf-8
+```
+
+Or query the plugin's own namespace directly. It is derived from the plugin id, so
+it has the same name everywhere:
+
+```sql
+select user_id, company_id, enabled, array_length(event_types, 1) as triggers,
+       created_at from plugin_webpush_7d3a6286ba.push_subscription;
+
+select status, event_type, http_status, created_at
+  from plugin_webpush_7d3a6286ba.push_delivery
+ order by created_at desc limit 10;
+```
+
+A healthy installation has one VAPID keypair, one subscription row per browser that
+enabled notifications, and `delivered` rows whenever something was pushed.
+
+---
 
 ## Requirements
 
 | Requirement | Why |
 | --- | --- |
-| An **HTTPS** origin (or `localhost`) | Service workers and the Push API only exist in a secure context. Serve the instance over your own TLS terminator, `tailscale serve`, or any real certificate — a plain `http://<lan-ip>:port` origin silently gets no service worker and no push. |
-| Chrome, Edge, Firefox, or Android Chrome | Web Push is supported in every current desktop browser and on Android. |
-| iOS: Safari 16.4+ **and** Add to Home Screen | iOS only delivers Web Push to a web app installed on the Home Screen, and only when the manifest asks for a standalone window (`display: standalone`). Paperclip's manifest deliberately ships `display: "browser"`, so **iOS is out of scope** for this plugin until that changes. Desktop and Android are unaffected. |
+| **HTTPS** origin (or `localhost`) | Service workers and the Push API exist only in a secure context. `tailscale serve`, a TLS terminator, or any real certificate works. |
+| Chrome, Edge, Firefox, or Android Chrome | Standard Web Push. Verified end to end on Chrome against Google's push service. |
+| iOS: Safari 16.4+ **and** Add to Home Screen | iOS delivers Web Push only to a Home Screen web app whose manifest requests a standalone window. Paperclip ships `display: "browser"`, so **iOS is out of scope**. |
+| Host: npm + registry access | Only for npm-package installs. Local-path installs instead need `node_modules` shipped. |
+| Plugin capability `access.members.read` | Used to resolve who belongs to an organization, for events that name nobody responsible. |
+
+---
 
 ## How it works
 
@@ -32,257 +262,128 @@ board action ──▶ activity log ──▶ plugin event ──▶ plugin work
 
 Three pieces:
 
-1. **Worker** (`src/worker.ts`, forked Node process) subscribes to the notifiable
-   event types, decides who should hear about each event, and sends the push.
-2. **Settings page** (`src/ui/SettingsPage.tsx`) runs same-origin inside the board,
-   asks for notification permission on an explicit click, registers the service
-   worker, creates the `PushSubscription`, and manages devices and event toggles.
-3. **Service worker** (`src/ui/sw.js`) is served as a static file from the
-   plugin's UI directory and handles `push` and `notificationclick`.
+1. **Worker** (`src/worker.ts`, a forked Node process) subscribes to the triggers,
+   decides who should hear about each event, and sends the push.
+2. **Settings page** (`src/ui/SettingsPage.tsx`) runs same-origin inside the board:
+   it asks for permission on an explicit click, registers the service worker,
+   creates the `PushSubscription`, and manages devices and toggles.
+3. **Service worker** (`src/ui/sw.js`) is served as a static file from the plugin's
+   UI directory and handles `push` and `notificationclick`.
 
-The service worker is registered at `/_plugins/<pluginId>/ui/sw.js`, with its
-scope limited to that directory. It **coexists** with the app's own root-scoped
-`/sw.js` rather than replacing it, and it deliberately registers no `fetch`
-listener, so it can never interfere with the app's offline behaviour.
+The service worker is registered at `/_plugins/<pluginId>/ui/sw.js`, with its scope
+limited to that directory. It **coexists** with Paperclip's own root-scoped
+`/sw.js` instead of replacing it, and registers no `fetch` listener, so it cannot
+interfere with the app's offline behaviour.
 
 ### Data
 
-Subscriptions live in the plugin's own PostgreSQL namespace, never in core
-tables:
+Subscriptions live in the plugin's own PostgreSQL namespace, never in core tables:
 
 - `push_subscription` — one row per browser profile, keyed by the push service
-  endpoint (re-subscribing the same browser updates in place instead of stacking
-  duplicates).
-- `push_delivery` — one row per delivery attempt: the throttle ledger and the
-  "why didn't I get that?" trail surfaced on the settings page.
-- `vapid_keypair` — the instance's VAPID signing keypair, generated on first use.
+  endpoint, so re-enabling a browser updates in place instead of stacking rows.
+- `push_delivery` — one row per attempt: the throttle ledger and the "why didn't I
+  get that?" trail shown on the settings page.
+- `vapid_keypair` — the instance's signing keypair, generated on first use. One per
+  instance, not per organization.
 
-## Behaviour
-
-**Triggers** (each can be toggled per device). The defaults are attention-shaped:
-a push should mean a human is needed. A decision is exactly that — Paperclip's
-"choose an option, by this date" object — so `decision.created` and
-`approval.created` lead the defaults, followed by an assignment wakeup (addressed
-to a person) and a budget incident (an operator must act). Agent-activity and
-new-task notifications are opt-in, because pushing them by default is how a
-notification channel gets muted.
-
-| Event | Notification |
-| --- | --- |
-| `decision.created` | "Decision needed" → `/<prefix>/decisions` |
-| `decision.expired` (off by default) | "Decision overdue" → `/<prefix>/decisions` |
-| `approval.created` | "Approval needed" → `/<prefix>/approvals/<id>` |
-| `issue.assignment_wakeup_requested` | "Task assigned" → `/<prefix>/issues/<id>` |
-| `agent.run.failed` (off by default) | "Agent run failed" → `/<prefix>/issues/<id>` |
-| `budget.incident.opened` | "Budget threshold crossed" → `/<prefix>/activity/budgets` |
-| `agent.run.failed` (off by default) | "Agent run failed" → `/<prefix>/issues/<id>` |
-| `issue.created` (off by default) | "New task" → `/<prefix>/issues/<id>` |
-
-**Targeting.** The activity log stamps events with `payload.responsibleUserId`.
-When it is present, only that user's devices are notified — waking the whole
-board for someone else's approval is the fastest way to get notifications muted.
-That lookup is deliberately **not** company-scoped: a device registered while
-looking at company A still receives what its owner is responsible for in company
-B, because the device belongs to a person, not to a company. (On a multi-company
-instance the company-scoped alternative silently drops every other company's
-events, which reads as "notifications are broken".)
-
-When no responsible user is named, the fallback **is** company-scoped: every
-subscriber in that company who opted into that event type is notified, so an
-unassigned budget incident in one company does not buzz another company's
-subscribers.
-
-**Multiple organizations.** A notification is addressed to a *person*, so the
-device and its event-type toggles belong to that person and not to a company:
-
-- An event that names a responsible user reaches that user's devices **in any
-  company**. A device registered while looking at one company still receives what
-  its owner is responsible for in another.
-- An event that names nobody responsible goes to the devices of the event
-  company's **active human members** (read from the host with
-  `access.members.read`). It deliberately does not go to other companies'
-  subscribers. The company a device was registered from is provenance, not a
-  delivery gate — an earlier version used it as one, which meant unassigned
-  events only reached whichever company someone last clicked Enable in.
-- If the host cannot answer the membership question, the plugin falls back to the
-  company-scoped rule rather than dropping the notification.
-- Deep links always carry the event's own company prefix, so a notification from
-  one organization opens that organization.
-- There is one VAPID keypair per instance, and no per-organization preference
-  matrix: the toggles and the throttle are per device, shared across companies.
-
-**Devices.** One row per browser profile that registered. Removing a profile or a
-browser leaves its row behind, so the settings page offers **Remove** per device;
-the daily job prunes devices that failed at least five times and never once
-succeeded.
-
-**Throttle.** At most 12 pushes per device per 5 minutes. Suppressed pushes are
-recorded with status `throttled`, so the settings page can explain the gap.
-
-**Pruning.** A daily job (`0 4 * * *`) drops delivery rows older than 30 days and
-devices that have failed at least 5 times and never once succeeded. Endpoints the
-push service reports as gone (HTTP 404/410) are deleted immediately.
-
-## Install
-
-### Local path (development)
-
-```bash
-pnpm install
-pnpm build
-paperclipai plugin install /absolute/path/to/paperclip-plugin-webpush \
-  --api-base http://127.0.0.1:3100
-paperclipai plugin inspect conreo.webpush
-```
-
-The server must be able to read the path you pass: local-path installs are read
-from the **server's** filesystem, not the CLI's.
-
-### A remote or containerised instance
-
-Two supported routes, depending on how the instance is deployed.
-
-**A. Copy into the running container** (no compose change, no rebuild). Build the
-portable artifact first — `scripts/bundle-deploy.sh` emits `dist/` +
-`migrations/` + a flat production `node_modules` (~4 MB), because `web-push` is
-resolved at runtime and cannot be bundled. It prints the absolute target path —
-use that path, and delete stale copies of it, because an old bundle installs
-cleanly and silently brings back fixed bugs:
-
-```bash
-./scripts/bundle-deploy.sh .cache/deploy-webpush
-
-# stage on the host, then copy into the container's persistent volume
-rsync -a --delete .cache/deploy-webpush/ <host>:/tmp/webpush/
-ssh <host> 'sudo docker cp /tmp/webpush $(sudo docker ps -q -f name=server):/paperclip/plugins/webpush'
-
-# install against the instance itself
-paperclipai plugin install /paperclip/plugins/webpush \
-  --api-base https://paperclip.example.ts.net
-```
-
-`/paperclip` is the instance's persistent volume, so the plugin survives
-container restarts (but not volume deletion).
-
-The path is resolved on the **server**, so the `paperclipai plugin install` step
-can run from any machine that can reach the instance — the path only has to exist
-inside the container. Authenticate the CLI against the instance once first:
-
-```bash
-paperclipai auth login --api-base https://paperclip.example.ts.net
-```
-
-**B. Bind mount + local path.** Add `- /opt/paperclip-plugins:/plugins:ro` to the
-server service in your compose override and recreate the container. Use this when
-you want to update the plugin by re-copying files rather than `docker cp`.
-
-**C. npm package** (the upstream-blessed production artifact): publish to npm or
-a private registry, then `paperclipai plugin install <package>@<version>`. The
-container has `npm` available, so this works without any mount.
-
-### Register a browser
-
-Open the plugin's settings page. Reach it from the **Instance Settings → Plugins**
-sidebar entry (the host builds that link itself), or by URL. The URL is keyed by
-the plugin **record id**, not the plugin key — typing the key into the URL renders
-the host's auto-generated configuration form instead of this plugin's UI:
-
-```
-https://<instance>/<companyPrefix>/company/settings/instance/plugins/<pluginRecordId>
-```
-
-`<companyPrefix>` is the company's issue prefix (e.g. `ACME`), and the record id is
-shown by `paperclipai plugin inspect conreo.webpush` as `id=…`.
-
-Click **Enable notifications**, allow the browser prompt, then **Send test
-notification**. If the test arrives but board events do not, check that the
-event's type is enabled for that device and that the device's delivery list does
-not show `throttled`.
+A daily job (`0 4 * * *`) drops delivery rows older than 30 days and devices that
+failed at least five times and never once succeeded. Endpoints the push service
+reports as gone (HTTP 404/410) are deleted immediately.
 
 ## Operations
 
 ```bash
 paperclipai plugin list                      # status + version
-paperclipai plugin inspect conreo.webpush    # full record, last error
-paperclipai plugin health conreo.webpush     # registry/manifest/status checks
+paperclipai plugin inspect conreo.webpush    # full record, including last error
+paperclipai plugin health conreo.webpush     # registry / manifest / status checks
 paperclipai plugin disable conreo.webpush    # pause without uninstalling
 paperclipai plugin enable conreo.webpush     # resume
-paperclipai plugin uninstall conreo.webpush  # remove install record
+paperclipai plugin uninstall conreo.webpush  # remove the install record
 ```
-
-The settings page shows, per device: its event toggles, the last five delivery
-attempts with HTTP status, and per-device test and remove buttons.
 
 ## Limitations
 
-- **Decision notifications need a host that emits decision events.** The
-  Decisions Desk logs `decision.created` (with `originIssueId`, `originAgentId`,
-  `originResponsibleUserId`, and a `decide_by` deadline on `decision_triage`) but
-  those actions were absent from `PLUGIN_EVENT_TYPES`, so the bus dropped them and
-  no plugin could see a decision. That gap is fixed upstream in
-  [paperclipai/paperclip#13306](https://github.com/paperclipai/paperclip/pull/13306);
-  until the host carries it, the two decision toggles are simply inert. Nothing
-  breaks in the meantime: the host's `events.subscribe` registers the pattern
-  without validating it and matches it only against emitted events, so an
-  unemitted trigger never fires and never errors — which is why the plugin
-  registers it unconditionally instead of probing host capabilities.
-- **The inbox is a derived view, not an event.** There is no "inbox item created"
-  event; approvals and assignment wakeups are the inbox-addressed signals the event
-  surface exposes, which is why they are the defaults.
-- **iOS needs a standalone manifest.** See the requirements table.
-- **VAPID keys are generated per instance and stored in the plugin namespace.**
-  Rotating or deleting them invalidates every existing subscription; the
-  settings page will then show `failed` deliveries with a 400/403 status and the
-  device has to re-register (unsubscribe and Enable again).
-- **Two frozen identifiers.** The database namespace is
-  `plugin_<namespaceSlug>_<sha256(manifest.id)[0:10]>`, so changing `manifest.id`
-  or `database.namespaceSlug` points the plugin at a different, empty schema.
-- **Local-path rebuilds do not reload the worker by themselves.** After
-  `pnpm build`, run `paperclipai plugin disable` then `enable` to restart it.
-- **`web-push` cannot be bundled.** Keep it external and ship `node_modules`.
-- Plain-HTTP origins get neither the service worker nor push, with no visible
-  error.
+- **Decision notifications need a host that emits decision events.** The Decisions
+  Desk logs `decision.created` with exactly the payload a notifier needs, but those
+  actions were missing from `PLUGIN_EVENT_TYPES`, so the event bus dropped them.
+  Fixed upstream in [paperclipai/paperclip#13306](https://github.com/paperclipai/paperclip/pull/13306);
+  on an older host the two decision toggles are inert. Nothing breaks meanwhile —
+  an unemitted trigger never fires and never errors.
+- **The inbox is a view, not an event.** Paperclip exposes no "inbox item created"
+  event, so approvals and assignment wakeups are the inbox-addressed signals
+  available, which is why they are defaults.
+- **iOS needs a standalone manifest.** See Requirements.
+- **VAPID keys are per instance.** Rotating or losing them invalidates every
+  subscription; devices then report `failed` and must re-enable.
+- **Two frozen identifiers.** The namespace is
+  `plugin_<namespaceSlug>_<sha256(manifest.id)[0:10]>`, so changing `manifest.id` or
+  `database.namespaceSlug` points the plugin at a different, empty schema.
+- **Local-path rebuilds do not restart the worker.** After `pnpm build`, run
+  `paperclipai plugin disable` then `enable`.
+- **Each browser profile is its own device.** Deleting a profile leaves its row
+  behind; use **Remove** on the settings page.
+
+---
 
 ## Development
 
 ```bash
 pnpm install
 pnpm typecheck     # tsc --noEmit
-pnpm test          # vitest: delivery logic, manifest, service-worker contract
+pnpm test          # vitest: delivery logic, manifest contract, service worker contract
 pnpm build         # esbuild -> dist/worker.js, dist/manifest.js, dist/ui/
 pnpm dev           # same, in watch mode
 ```
 
 Four Playwright checks run against a live instance. They use persistent Chrome
-profiles (`SPIKE_PROFILE_DIR` overrides per-check) because Chrome disables the
-Push API in incognito contexts, and shared helpers in `scripts/lib/browser.mjs`:
+profiles (`SPIKE_PROFILE_DIR` overrides per check) because Chrome disables the Push
+API in incognito contexts, and shared helpers in `scripts/lib/browser.mjs`:
 
 ```bash
-node scripts/e2e-local.mjs          # permission -> subscribe -> real test push -> notification rendered
-node scripts/e2e-event.mjs          # creates a real issue, expects a notification, deletes the issue
-node scripts/e2e-approval.mjs       # creates an approval, expects "Approval needed", then rejects it
+node scripts/e2e-local.mjs      # permission -> subscribe -> real test push -> notification rendered
+node scripts/e2e-event.mjs      # creates a real issue, expects a notification, deletes the issue
+node scripts/e2e-approval.mjs   # creates an approval, expects "Approval needed", then rejects it
 SPIKE_OTHER_COMPANY_ID=<id> SPIKE_OTHER_PREFIX=<PFX> \
-  node scripts/e2e-cross-company.mjs  # event from a second company reaches a device registered in the first
+  node scripts/e2e-cross-company.mjs   # an event from a second company reaches a device registered in the first
 ```
 
-Environmental overrides: `SPIKE_BASE_URL`, `SPIKE_COMPANY_PREFIX`, `SPIKE_COMPANY_ID`,
+Overrides: `SPIKE_BASE_URL`, `SPIKE_COMPANY_PREFIX`, `SPIKE_COMPANY_ID`,
 `SPIKE_PLUGIN_ID`, `SPIKE_CHROME_PATH`, `SPIKE_PROFILE_DIR`.
 
 Three rules these checks follow, each learned from a false alarm that cost real
 debugging time:
 
 - **Assert an outcome, never an assumption.** They wait for the success notice and
-  for the device card marked `This browser` — a stale row from an earlier run
+  for the device card marked *This browser*. A stale row from an earlier run
   otherwise satisfies "a device is registered" instantly while this run's
   registration silently failed.
 - **Delete the Chrome profile to test first use.** A registration persists in a
-  profile, so only a fresh profile exercises the path a new operator takes (this
-  is what surfaced the service-worker activation race that made the very first
-  *Enable* click fail).
-- **Expect the throttle.** Pushing more than 12 notifications to one device within
-  5 minutes suppresses further ones, recorded as `throttled`. Every check uses its
-  own profile for this reason, and `explainMiss()` reports a throttled device
-  rather than leaving it looking like a delivery failure.
+  profile, so only a fresh profile exercises the path a new operator takes. This is
+  what surfaced the service-worker activation race that made the very first
+  *Enable* click fail.
+- **Expect the throttle.** More than 12 pushes to one device in 5 minutes are
+  suppressed and recorded as `throttled`; `explainMiss()` reports that instead of
+  leaving it looking like a delivery failure.
+
+### Publishing
+
+Maintainers only. The package ships prebuilt output on purpose: the host installs
+with `npm install <spec> --ignore-scripts`, so nothing is compiled on the target —
+the tarball must already contain `dist/`.
+
+```bash
+npm login
+npm publish              # prepublishOnly runs pnpm build && pnpm test
+npm view paperclip-plugin-webpush version
+```
+
+npm refuses to publish without a second factor when the account has 2FA enabled:
+*"Two-factor authentication or granular access token with bypass 2fa enabled is
+required to publish packages."* Either pass a current code
+(`npm publish --otp=123456`), or create a **granular access token** with
+**Read and write** on **All packages** and **Bypass two-factor authentication**
+ticked. Choose *All packages*, not a single package: a token restricted to named
+packages cannot create a package that does not exist yet.
 
 ## Licence
 
