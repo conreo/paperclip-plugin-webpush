@@ -15,7 +15,7 @@ import {
   launchProfile,
   openSettingsPage,
   readNotifications,
-  waitForNotification,
+  waitForPushedMessage,
 } from "./lib/browser.mjs";
 
 const BASE = process.env.SPIKE_BASE_URL ?? "http://127.0.0.1:3100";
@@ -38,6 +38,7 @@ const { context, page } = await launchProfile("chrome-profile-approval");
 await openSettingsPage(page);
 await enableNotifications(page);
 await readNotifications(page, { clear: true });
+const startedAt = Date.now();
 
 let approvalId = null;
 try {
@@ -57,20 +58,34 @@ try {
   approvalId = created.id ?? created.approval?.id ?? null;
   console.log(`created approval ${approvalId}`);
 
-  const notification = await waitForNotification(page, (item) => item.title === "Approval needed");
-  if (!notification) {
+  // The built-in line is "<what happened>: <ORG> | <the specifics>", and this is the
+  // only check that sees an approval arrive with that wording and nothing customised.
+  // `at` must be from this run: the worker keeps its record between runs, so a match
+  // on an older message would pass without this run sending anything.
+  const pushed = await waitForPushedMessage(
+    page,
+    (payload) => /^Approval: [A-Z0-9]+ \| .+/.test(payload.title) && payload.at >= startedAt,
+    120000,
+  );
+  if (pushed.miss) {
     const miss = await explainMiss(page);
     console.log(`NO APPROVAL NOTIFICATION — ${miss.hint}`);
+    console.log(`worker last showed: ${JSON.stringify(pushed.last?.payload ?? null)}`);
     console.log(miss.panel);
     process.exitCode = 1;
   } else {
-    console.log("=== live approval notification ===");
-    console.log(JSON.stringify(notification, null, 2));
+    console.log("=== live approval notification, built-in wording ===");
+    console.log(JSON.stringify(pushed, null, 2));
     const expected = `/${PREFIX}/approvals/${approvalId}`;
     console.log(
-      notification.url === expected
-        ? `deep link correct: ${notification.url}`
-        : `deep link mismatch: got ${notification.url}, expected ${expected}`,
+      pushed.url === expected
+        ? `PASS: deep link correct: ${pushed.url}`
+        : `FAIL: deep link is ${pushed.url}, expected ${expected}`,
+    );
+    console.log(
+      pushed.body === ""
+        ? "PASS: one line, no body — the built-in message carries everything"
+        : `NOTE: the built-in message also has a body: ${JSON.stringify(pushed.body)}`,
     );
   }
 } finally {
