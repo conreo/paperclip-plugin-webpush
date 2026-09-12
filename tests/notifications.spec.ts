@@ -10,7 +10,12 @@ import {
   type SubscriptionTarget,
 } from "../src/notifications.js";
 
-function event(overrides: Partial<PluginEvent> = {}): PluginEvent {
+/**
+ * Builds an event envelope. Deliberately loosely typed: these tests exercise
+ * trigger names that exist in the host before the published SDK typings include
+ * them (the decision lifecycle), and the runtime value is a plain string.
+ */
+function event(overrides: Record<string, unknown> = {}): PluginEvent {
   return {
     eventId: "evt-1",
     eventType: "approval.created",
@@ -22,7 +27,7 @@ function event(overrides: Partial<PluginEvent> = {}): PluginEvent {
     actorType: "user",
     payload: {},
     ...overrides,
-  } as PluginEvent;
+  } as unknown as PluginEvent;
 }
 
 function subscription(overrides: Partial<SubscriptionTarget> = {}): SubscriptionTarget {
@@ -51,10 +56,47 @@ describe("notification defaults", () => {
 
   it("defaults to the signals that mean a person must act", () => {
     expect(DEFAULT_EVENT_TYPES).toEqual([
+      "decision.created",
       "approval.created",
       "issue.assignment_wakeup_requested",
       "budget.incident.opened",
     ]);
+  });
+});
+
+describe("decision notifications", () => {
+  it("deep-links a new decision to the decisions desk", () => {
+    const notification = buildNotification(
+      event({
+        eventType: "decision.created",
+        entityId: "decision-1",
+        entityType: "decision",
+        payload: { details: { originIssueId: "issue-9", originResponsibleUserId: "user-1" } },
+      }),
+      "ACME",
+    );
+    expect(notification).toMatchObject({
+      title: "Decision needed",
+      url: "/ACME/decisions",
+      tag: "decision.created",
+      eventId: "evt-1",
+    });
+  });
+
+  it("flags a decision that passed its decide-by date", () => {
+    const notification = buildNotification(
+      event({ eventType: "decision.expired", entityId: "decision-2", entityType: "decision" }),
+      "ACME",
+    );
+    expect(notification?.title).toBe("Decision overdue");
+    expect(notification?.url).toBe("/ACME/decisions");
+  });
+
+  it("does not offer the settled outcomes as triggers", () => {
+    // dismissed/cancelled report that a decision is done; interrupting someone
+    // for that is noise.
+    expect(NOTIFIABLE_EVENT_TYPES).not.toContain("decision.dismissed");
+    expect(NOTIFIABLE_EVENT_TYPES).not.toContain("decision.cancelled");
   });
 });
 

@@ -60,13 +60,17 @@ tables:
 ## Behaviour
 
 **Triggers** (each can be toggled per device). The defaults are attention-shaped:
-a push should mean a human is needed. `approval.created` is both a decision and an
-inbox item, an assignment wakeup is addressed to a person, and a budget incident
-needs an operator to act. Agent-activity and new-task notifications are opt-in,
-because pushing them by default is how a notification channel gets muted.
+a push should mean a human is needed. A decision is exactly that — Paperclip's
+"choose an option, by this date" object — so `decision.created` and
+`approval.created` lead the defaults, followed by an assignment wakeup (addressed
+to a person) and a budget incident (an operator must act). Agent-activity and
+new-task notifications are opt-in, because pushing them by default is how a
+notification channel gets muted.
 
 | Event | Notification |
 | --- | --- |
+| `decision.created` | "Decision needed" → `/<prefix>/decisions` |
+| `decision.expired` (off by default) | "Decision overdue" → `/<prefix>/decisions` |
 | `approval.created` | "Approval needed" → `/<prefix>/approvals/<id>` |
 | `issue.assignment_wakeup_requested` | "Task assigned" → `/<prefix>/issues/<id>` |
 | `agent.run.failed` (off by default) | "Agent run failed" → `/<prefix>/issues/<id>` |
@@ -187,16 +191,17 @@ attempts with HTTP status, and per-device test and remove buttons.
 
 ## Limitations
 
-- **The Decisions Desk cannot be pushed**, and it is the most obvious thing an
-  operator would want. `decision.created` (and `decision.expired` / `dismissed`)
-  are logged as activity actions with exactly the right payload —
-  `{ originIssueId, originAgentId, originResponsibleUserId }`, plus a `decide_by`
-  deadline on `decision_triage` — but they are absent from `PLUGIN_EVENT_TYPES` and
-  from the host's activity-action→event map, so `eventTypeForActivityAction()`
-  returns null and the plugin bus never forwards them. A plugin worker has no
-  authenticated route to `GET /api/companies/:id/decisions` either. Covering
-  decisions needs a small upstream change (add `decision.created` to the event
-  constants and the mapping) or a host API for decisions.
+- **Decision notifications need a host that emits decision events.** The
+  Decisions Desk logs `decision.created` (with `originIssueId`, `originAgentId`,
+  `originResponsibleUserId`, and a `decide_by` deadline on `decision_triage`) but
+  those actions were absent from `PLUGIN_EVENT_TYPES`, so the bus dropped them and
+  no plugin could see a decision. That gap is fixed upstream in
+  [paperclipai/paperclip#13306](https://github.com/paperclipai/paperclip/pull/13306);
+  until the host carries it, the two decision toggles are simply inert. Nothing
+  breaks in the meantime: the host's `events.subscribe` registers the pattern
+  without validating it and matches it only against emitted events, so an
+  unemitted trigger never fires and never errors — which is why the plugin
+  registers it unconditionally instead of probing host capabilities.
 - **The inbox is a derived view, not an event.** There is no "inbox item created"
   event; approvals and assignment wakeups are the inbox-addressed signals the event
   surface exposes, which is why they are the defaults.

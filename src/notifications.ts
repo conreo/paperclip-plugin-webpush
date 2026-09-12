@@ -32,6 +32,16 @@ export const NOTIFIABLE_EVENT_TYPES = [
   "agent.run.failed",
   "budget.incident.opened",
   "issue.created",
+  // Decisions Desk lifecycle. `decision.created` is the platform's "a human must
+  // choose, by this date" object; `decision.expired` means that deadline already
+  // passed. The `dismissed` and `cancelled` outcomes are deliberately absent:
+  // they report that a decision is settled, which is not a reason to interrupt
+  // anybody. These names arrive only from a host that emits them (the plugin
+  // event surface gained them in paperclipai/paperclip#13306); on an older host
+  // the subscription simply never matches, which is why it is safe to register
+  // unconditionally.
+  "decision.created",
+  "decision.expired",
 ] as const;
 
 export type NotifiableEventType = (typeof NOTIFIABLE_EVENT_TYPES)[number];
@@ -45,6 +55,7 @@ export type NotifiableEventType = (typeof NOTIFIABLE_EVENT_TYPES)[number];
  * default is how a notification channel gets muted.
  */
 export const DEFAULT_EVENT_TYPES: NotifiableEventType[] = [
+  "decision.created",
   "approval.created",
   "issue.assignment_wakeup_requested",
   "budget.incident.opened",
@@ -56,6 +67,8 @@ export function isNotifiableEventType(value: string): value is NotifiableEventTy
 
 /** Short human label per event type, used by the settings UI. */
 export const EVENT_TYPE_LABELS: Record<NotifiableEventType, string> = {
+  "decision.created": "The decisions desk needs a choice from you",
+  "decision.expired": "A decision passed its decide-by date",
   "approval.created": "An approval is waiting for a decision",
   "issue.assignment_wakeup_requested": "A task was handed to someone",
   "agent.run.failed": "An agent run failed",
@@ -94,14 +107,39 @@ export function buildNotification(
   event: PluginEvent,
   companyPrefix: string | null,
 ): NotificationPayload | null {
-  if (!isNotifiableEventType(event.eventType)) return null;
+  // Read the name into a plain string first. Narrowing `event.eventType` directly
+  // intersects the host's name with the installed SDK's `PluginEventType` union,
+  // which drops any trigger this plugin knows about before the SDK does — the
+  // decision lifecycle is in the host (paperclipai/paperclip#13306) but not yet in
+  // the published typings.
+  const eventType: string = event.eventType;
+  if (!isNotifiableEventType(eventType)) return null;
 
   const payload = asRecord(event.payload);
   const details = asRecord(payload.details);
   const eventId = event.eventId;
-  const base = { eventType: event.eventType, eventId, tag: event.eventType };
+  const base = { eventType, eventId, tag: eventType };
 
-  switch (event.eventType) {
+  switch (eventType) {
+    case "decision.created": {
+      // The payload carries the origin (issue, agent, responsible user) but no
+      // decision title, so the body stays generic and the link goes to the desk
+      // where the choice is actually made.
+      return {
+        ...base,
+        title: "Decision needed",
+        body: "A decision is waiting for your choice.",
+        url: link(companyPrefix, "/decisions"),
+      };
+    }
+    case "decision.expired": {
+      return {
+        ...base,
+        title: "Decision overdue",
+        body: "A decision passed its decide-by date.",
+        url: link(companyPrefix, "/decisions"),
+      };
+    }
     case "approval.created": {
       const approvalType = typeof details.type === "string" ? details.type : "request";
       return {

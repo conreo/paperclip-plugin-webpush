@@ -207,8 +207,15 @@ const plugin = definePlugin({
       ctx.logger.error(`could not ensure VAPID keypair: ${String(error)}`);
     }
 
+    // The host validates nothing here — `events.subscribe` registers the pattern
+    // and an event that never fires simply never matches — so subscribing to a
+    // trigger the host does not emit yet is safe. The cast is only needed because
+    // the installed SDK's event-name union lags the host for the decision
+    // lifecycle (paperclipai/paperclip#13306); the runtime contract is a string.
+    type SubscribableEvent = Parameters<PluginContext["events"]["on"]>[0];
+
     for (const eventType of NOTIFIABLE_EVENT_TYPES) {
-      ctx.events.on(eventType, async (event) => {
+      ctx.events.on(eventType as SubscribableEvent, async (event) => {
         try {
           await fanOut(ctx, db, event);
         } catch (error) {
