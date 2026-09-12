@@ -70,15 +70,37 @@ const PAIRS = {
     plugin: ".pcp-btn-destructive",
     props: ["font-size", "line-height", "font-weight", "border-radius", "padding", "height", "gap"],
   },
+  // Transitions, cursor and shadow are compared too: the first run of this check
+  // called the switch identical while its shadow was one layer instead of Tailwind's
+  // two and its transition was 0.12s/ease instead of 0.15s/cubic-bezier.
   switch: {
     host: "button[role='switch'][data-testid='company-settings-team-approval-toggle']",
     plugin: ".pcp-switch",
-    props: ["width", "height", "border-radius", "border-width", "padding"],
+    props: [
+      "width",
+      "height",
+      "border-radius",
+      "border-width",
+      "padding",
+      "cursor",
+      "transition-property",
+      "transition-duration",
+      "transition-timing-function",
+    ],
   },
   "switch thumb": {
     host: "button[role='switch'][data-testid='company-settings-team-approval-toggle'] > span",
     plugin: ".pcp-switch-thumb",
-    props: ["width", "height", "border-radius", "translate"],
+    props: [
+      "width",
+      "height",
+      "border-radius",
+      "translate",
+      "box-shadow",
+      "background-clip",
+      "transition-property",
+      "transition-duration",
+    ],
   },
 };
 
@@ -98,12 +120,39 @@ const TOKENS = [
   { plugin: ".pcp-hint", property: "color", token: "--muted-foreground" },
 ];
 
-/** `rounded-full` is Tailwind's `calc(infinity * 1px)`; a 9999px capsule is the same shape. */
+/**
+ * Two values that differ only in how they are written.
+ *
+ * These come from Tailwind rather than from a mistake, and each was a false diff
+ * before it was handled:
+ *   - `rounded-full` is `calc(infinity * 1px)`, which Chrome reports as ~3.4e7px;
+ *     a 9999px capsule is the same shape.
+ *   - `shadow-sm` is emitted with four transparent placeholder layers (ring, inset
+ *     ring, ring offset) ahead of the two real ones.
+ *   - a transition that lists several properties repeats its duration per property,
+ *     so "0.15s, 0.15s, 0.15s, 0.15s" is the same timing as "0.15s".
+ */
 function equivalent(property, host, plugin) {
   if (host === plugin) return true;
-  if (property === "border-radius" && Number.parseFloat(host) > 1000 && Number.parseFloat(plugin) > 1000) {
-    return true;
+
+  if (property === "border-radius") {
+    return Number.parseFloat(host) > 1000 && Number.parseFloat(plugin) > 1000;
   }
+
+  if (property === "box-shadow") {
+    const layers = (value) =>
+      value
+        .split(/,(?![^(]*\))/)
+        .map((layer) => layer.trim())
+        .filter((layer) => !/rgba\(0, 0, 0, 0\)|transparent/.test(layer));
+    return layers(host).join(",") === layers(plugin).join(",");
+  }
+
+  if (property === "transition-duration") {
+    const durations = (value) => [...new Set(value.split(",").map((part) => part.trim()))].join(",");
+    return durations(host) === durations(plugin);
+  }
+
   return false;
 }
 

@@ -92,6 +92,29 @@ describe("plugin stylesheet", () => {
     expect(hexes).toEqual(["#fff"]);
   });
 
+  it("holds no backtick, which would end the template literal it is written in", () => {
+    // The stylesheet is a template literal, so one backtick in a comment truncates
+    // the CSS and turns the rest of the file into a syntax error. That happened three
+    // times, each costing a build cycle.
+    expect(PLUGIN_STYLES.includes("`")).toBe(false);
+  });
+
+  it("defines no selector twice, so a later copy cannot silently win", () => {
+    // A duplicated block is invisible: for the properties both set, the second wins,
+    // and for the rest the first does. That is how the switch ended up with two
+    // definitions and half of each applied.
+    const selectors = [...PLUGIN_STYLES.matchAll(/(?:^|\})\s*([^{}@]+)\{/g)]
+      .map((match) => match[1].trim())
+      .filter(Boolean);
+    const seen = new Set();
+    const duplicated = [];
+    for (const selector of selectors) {
+      if (seen.has(selector)) duplicated.push(selector);
+      seen.add(selector);
+    }
+    expect(duplicated).toEqual([]);
+  });
+
   it("does nothing without a document, so the module is importable outside a browser", () => {
     expect(() => usePluginStyles()).not.toThrow();
   });

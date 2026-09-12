@@ -150,14 +150,19 @@ export const PLUGIN_STYLES = `
   padding: 0;
   border: 2px solid transparent; border-radius: 9999px;
   background: color-mix(in oklab, var(--input) 90%, transparent);
-  cursor: pointer; outline: none;
-  transition: background-color 120ms, border-color 120ms;
+  /* The host's own switch is a button with no cursor class, so it shows the default
+     arrow; its transitions are Tailwind's transition-all defaults. Both are copied
+     rather than improved on, because this control is meant to be indistinguishable
+     from the host's. */
+  cursor: default; outline: none;
+  transition: all 150ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 .pcp-switch[aria-checked="true"] {
   border-color: var(--status-task-done);
   background: var(--status-task-done);
 }
 .pcp-switch:disabled { cursor: not-allowed; opacity: 0.5; }
+.pcp-switch:not(:disabled):hover { border-color: transparent; }
 .pcp-switch:focus-visible {
   border-color: var(--ring);
   box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 30%, transparent);
@@ -167,8 +172,17 @@ export const PLUGIN_STYLES = `
   width: 1.5rem; height: 1rem;
   border-radius: 9999px;
   background: var(--background);
-  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.1);
-  transition: translate 140ms ease;
+  /* Tailwind v4's shadow-sm is two layers, and not-dark:bg-clip-padding clips the
+     background to the padding box. */
+  background-clip: padding-box;
+  box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+  /* Tailwind v4's transition-transform covers all four individual transform
+     properties, not just the one that moves the thumb today. */
+  transition:
+    transform 150ms cubic-bezier(0.4, 0, 0.2, 1),
+    translate 150ms cubic-bezier(0.4, 0, 0.2, 1),
+    scale 150ms cubic-bezier(0.4, 0, 0.2, 1),
+    rotate 150ms cubic-bezier(0.4, 0, 0.2, 1);
   translate: 0 0;
 }
 .pcp-switch[aria-checked="true"] .pcp-switch-thumb { translate: 1rem 0; }
@@ -222,43 +236,22 @@ export const PLUGIN_STYLES = `
 .pcp-notification-body { font-size: 0.8125rem; line-height: 1.25rem; color: var(--muted-foreground); }
 
 /* The host's ToggleSwitch: a capsule with an oblong thumb, green when on. */
-.pcp-switch {
-  position: relative; display: inline-flex; flex-shrink: 0; align-items: center;
-  width: 2.75rem; height: 1.25rem;
-  padding: 0;
-  border: 2px solid transparent; border-radius: 9999px;
-  background: color-mix(in oklab, var(--input) 90%, transparent);
-  cursor: pointer; outline: none;
-  transition: background-color 120ms, border-color 120ms;
-}
-.pcp-switch[aria-checked="true"] {
-  border-color: var(--status-task-done);
-  background: var(--status-task-done);
-}
-.pcp-switch:disabled { cursor: not-allowed; opacity: 0.5; }
-.pcp-switch:focus-visible {
-  border-color: var(--ring);
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 30%, transparent);
-}
-.pcp-switch-thumb {
-  display: inline-block; pointer-events: none;
-  width: 1.5rem; height: 1rem;
-  border-radius: 9999px;
-  background: var(--background);
-  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.1);
-  transition: translate 140ms ease;
-  translate: 0 0;
-}
-.pcp-switch[aria-checked="true"] .pcp-switch-thumb { translate: 1rem 0; }
-.dark .pcp-switch-thumb { background: var(--foreground); }
+
+
+
+
+
+
+
+
 
 /*
  * One trigger's editor: its label, its two fields, and the preview of what will
  * actually be sent. A hairline between triggers keeps a long list readable
  * without boxing every entry.
  */
-.pcp-trigger { display: grid; gap: 0.5rem; padding-top: 1rem; border-top: 1px solid var(--border); }
-.pcp-trigger:first-of-type { padding-top: 0; border-top: 0; }
+
+
 
 /*
  * A message field. The editable region and the insert button share one bordered
