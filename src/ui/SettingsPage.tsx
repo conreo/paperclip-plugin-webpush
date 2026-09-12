@@ -726,8 +726,8 @@ export function SettingsPage(props: PluginSettingsPageProps) {
         testId="notification-content"
       >
         <ToggleRow
-          title="Show the organization name in notifications"
-          description="Prefixes notification titles. The name comes from the organization; the field below only overrides it."
+          title="Show the organization name"
+          description="Puts the organization's name in front of notification titles, so you can tell which organization a notification came from."
           checked={showLabel}
           disabled={saving}
           onChange={setIncludeOrganizationLabel}
@@ -735,15 +735,26 @@ export function SettingsPage(props: PluginSettingsPageProps) {
         />
 
         {showLabel ? (
-          <input
-            type="text"
-            value={organizationLabel ?? ""}
-            placeholder={config?.organizationName ?? "Your organization"}
-            onChange={(event) => setOrganizationLabel(event.target.value)}
-            style={{ ...inputStyle, marginLeft: "auto", maxWidth: "22rem" }}
-            aria-label="Override the organization name"
-            data-testid="org-label"
-          />
+          // Its own row rather than a footnote to the switch: this is an override,
+          // and the name it overrides is already known.
+          <div style={{ ...rowStyle, alignItems: "center" }}>
+            <span style={{ display: "grid", gap: "0.25rem" }}>
+              <span style={fieldLabel}>Name to show</span>
+              <span style={fieldHint}>
+                Leave empty to use the organization's own name
+                {config?.organizationName ? ` (${config.organizationName})` : ""}.
+              </span>
+            </span>
+            <input
+              type="text"
+              value={organizationLabel ?? ""}
+              placeholder={config?.organizationName ?? "Your organization"}
+              onChange={(event) => setOrganizationLabel(event.target.value)}
+              style={{ ...inputStyle, maxWidth: "18rem" }}
+              aria-label="Name to show instead of the organization name"
+              data-testid="org-label"
+            />
+          </div>
         ) : null}
 
         <ToggleRow
