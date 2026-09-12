@@ -96,6 +96,27 @@ function link(companyPrefix: string | null, path: string): string {
 }
 
 /**
+ * The built-in wording for a trigger, with no event data.
+ *
+ * The settings page uses it as placeholder text, so what an operator sees beside
+ * an empty field is what they will actually get. Derived from the same source as
+ * delivery, so the two cannot drift.
+ */
+export function previewDefaults(eventType: NotifiableEventType): { title: string; body: string } {
+  const sample = {
+    eventId: "preview",
+    eventType,
+    occurredAt: new Date(0).toISOString(),
+    companyId: "preview",
+    entityId: "preview",
+    entityType: "preview",
+    payload: {},
+  } as unknown as PluginEvent;
+  const draft = draftFor(sample, "COMPANY", eventType);
+  return { title: draft.title, body: draft.body };
+}
+
+/**
  * Turn one domain event into a notification, or `null` when the event carries
  * nothing an operator should be interrupted for.
  *
@@ -103,9 +124,193 @@ function link(companyPrefix: string | null, path: string): string {
  * detail, and issue titles or agent prose are not guaranteed to be present (and
  * would blow the payload budget when they are).
  */
+/** Operator-supplied text for one trigger. Missing parts keep the built-in wording. */
+export type NotificationTemplate = { title?: string; body?: string };
+
+/** How notification text should be rendered for a company. */
+export type NotificationPresentation = {
+  /** Name to show for the organization; defaults to the company's own name. */
+  organizationLabel: string | null;
+  includeOrganizationLabel: boolean;
+  templates: Record<string, NotificationTemplate>;
+};
+
+/**
+ * Placeholders each trigger offers, for the settings page to document and to
+ * preview. Every trigger also has `org`.
+ */
+export const TEMPLATE_PLACEHOLDERS: Record<NotifiableEventType, string[]> = {
+  "decision.created": [],
+  "decision.expired": [],
+  "approval.created": ["type"],
+  "issue.assignment_wakeup_requested": ["identifier"],
+  "agent.run.failed": ["run", "identifier"],
+  "budget.incident.opened": ["scope"],
+  "issue.created": ["identifier", "title"],
+};
+
+/** Sample values so the settings page can render a faithful preview. */
+export function sampleTemplateVars(
+  eventType: NotifiableEventType,
+  organizationLabel: string,
+): Record<string, string> {
+  const samples: Record<string, string> = {
+    type: "hire agent",
+    identifier: "ACME-42",
+    run: "12345678",
+    scope: "monthly",
+    title: "Ship the release",
+  };
+  const vars: Record<string, string> = { org: organizationLabel };
+  for (const name of TEMPLATE_PLACEHOLDERS[eventType] ?? []) {
+    vars[name] = samples[name] ?? name;
+  }
+  return vars;
+}
+
+export function resolvePresentation(
+  raw: unknown,
+  organizationName: string | null,
+): NotificationPresentation {
+  const config = asRecord(raw);
+  const templatesRaw = asRecord(config.templates);
+  const templates: Record<string, NotificationTemplate> = {};
+
+  for (const [eventType, value] of Object.entries(templatesRaw)) {
+    if (!isNotifiableEventType(eventType)) continue;
+    const entry = asRecord(value);
+    const title = typeof entry.title === "string" && entry.title.trim() ? entry.title.trim() : undefined;
+    const body = typeof entry.body === "string" && entry.body.trim() ? entry.body.trim() : undefined;
+    if (title || body) templates[eventType] = { title, body };
+  }
+
+  const label =
+    typeof config.organizationLabel === "string" && config.organizationLabel.trim()
+      ? config.organizationLabel.trim()
+      : organizationName;
+
+  return {
+    organizationLabel: label,
+    includeOrganizationLabel:
+      typeof config.includeOrganizationLabel === "boolean" ? config.includeOrganizationLabel : true,
+    templates,
+  };
+}
+
+/**
+ * Substitute `{{name}}` placeholders.
+ *
+ * The two "no value" cases are deliberately different:
+ * - `undefined` means the name is not a placeholder this trigger knows, so the
+ *   text is left verbatim and a typo stays visible in the settings preview.
+ * - `null` means the name is valid but this event has no value for it (an
+ *   approval without an identifier, say), so it substitutes to nothing instead of
+ *   leaving `{{identifier}}` in a notification somebody will read.
+ */
+export function renderTemplate(template: string, vars: Record<string, string | null | undefined>): string {
+  return template.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (match, name: string) => {
+    const value = vars[name];
+    if (typeof value === "string" && value.length > 0) return value;
+    return value === null ? "" : match;
+  });
+}
+
+type Draft = {
+  title: string;
+  body: string;
+  url: string;
+  /** `null` marks a valid placeholder this event has no value for. */
+  vars: Record<string, string | null>;
+};
+
+/** The built-in wording and the values its placeholders can use. */
+function draftFor(event: PluginEvent, companyPrefix: string | null, eventType: NotifiableEventType): Draft {
+  const payload = asRecord(event.payload);
+  const details = asRecord(payload.details);
+
+  switch (eventType) {
+    case "decision.created":
+      // The payload carries the origin (issue, agent, responsible user) but no
+      // decision title, so the body stays generic and the link goes to the desk
+      // where the choice is actually made.
+      return {
+        title: "Decision needed",
+        body: "A decision is waiting for your choice.",
+        url: link(companyPrefix, "/decisions"),
+        vars: {},
+      };
+    case "decision.expired":
+      return {
+        title: "Decision overdue",
+        body: "A decision passed its decide-by date.",
+        url: link(companyPrefix, "/decisions"),
+        vars: {},
+      };
+    case "approval.created": {
+      const approvalType = typeof details.type === "string" ? details.type : "request";
+      const readable = approvalType.replaceAll("_", " ");
+      return {
+        title: "Approval needed",
+        body: `A ${readable} is waiting for a decision.`,
+        url: link(companyPrefix, `/approvals/${event.entityId ?? ""}`),
+        vars: { type: readable },
+      };
+    }
+    case "issue.assignment_wakeup_requested": {
+      const identifier = typeof details.identifier === "string" ? details.identifier : null;
+      return {
+        title: "Task assigned",
+        body: identifier ? `${identifier} is waiting on you.` : "A task is waiting on you.",
+        url: link(companyPrefix, `/issues/${event.entityId ?? ""}`),
+        vars: { identifier },
+      };
+    }
+    case "agent.run.failed": {
+      const runRef = shortId(payload.runId);
+      const issueId = (payload.issueId as string | undefined) ?? event.entityId ?? "";
+      return {
+        title: "Agent run failed",
+        body: runRef ? `Run ${runRef} failed.` : "An agent run failed.",
+        url: link(companyPrefix, `/issues/${issueId}`),
+        vars: { run: runRef, identifier: null },
+      };
+    }
+    case "budget.incident.opened": {
+      const scope = typeof details.scope === "string" ? details.scope : "budget";
+      const readable = scope.replaceAll("_", " ");
+      return {
+        title: "Budget threshold crossed",
+        body: `A ${readable} incident was opened.`,
+        url: link(companyPrefix, "/activity/budgets"),
+        vars: { scope: readable },
+      };
+    }
+    case "issue.created": {
+      const identifier = typeof details.identifier === "string" ? details.identifier : null;
+      const issueTitle = typeof details.title === "string" ? details.title : null;
+      return {
+        title: identifier ? `New task ${identifier}` : "New task",
+        body: issueTitle ?? "A task was created.",
+        url: link(companyPrefix, `/issues/${event.entityId ?? ""}`),
+        vars: { identifier, title: issueTitle },
+      };
+    }
+  }
+}
+
+/**
+ * Turn one domain event into a notification, or `null` when the event carries
+ * nothing an operator should be interrupted for.
+ *
+ * Bodies stay generic by default: the event payload is the redacted activity
+ * detail, and issue titles or agent prose are not guaranteed to be present (and
+ * would blow the payload budget when they are). Operators can override the
+ * wording per trigger, and `presentation` is where that arrives.
+ */
 export function buildNotification(
   event: PluginEvent,
   companyPrefix: string | null,
+  presentation?: NotificationPresentation,
 ): NotificationPayload | null {
   // Read the name into a plain string first. Narrowing `event.eventType` directly
   // intersects the host's name with the installed SDK's `PluginEventType` union,
@@ -115,80 +320,24 @@ export function buildNotification(
   const eventType: string = event.eventType;
   if (!isNotifiableEventType(eventType)) return null;
 
-  const payload = asRecord(event.payload);
-  const details = asRecord(payload.details);
-  const eventId = event.eventId;
-  const base = { eventType, eventId, tag: eventType };
+  const draft = draftFor(event, companyPrefix, eventType);
+  const template = presentation?.templates[eventType];
+  const vars: Record<string, string | null | undefined> = {
+    ...draft.vars,
+    org: presentation?.organizationLabel ?? null,
+  };
 
-  switch (eventType) {
-    case "decision.created": {
-      // The payload carries the origin (issue, agent, responsible user) but no
-      // decision title, so the body stays generic and the link goes to the desk
-      // where the choice is actually made.
-      return {
-        ...base,
-        title: "Decision needed",
-        body: "A decision is waiting for your choice.",
-        url: link(companyPrefix, "/decisions"),
-      };
-    }
-    case "decision.expired": {
-      return {
-        ...base,
-        title: "Decision overdue",
-        body: "A decision passed its decide-by date.",
-        url: link(companyPrefix, "/decisions"),
-      };
-    }
-    case "approval.created": {
-      const approvalType = typeof details.type === "string" ? details.type : "request";
-      return {
-        ...base,
-        title: "Approval needed",
-        body: `A ${approvalType.replaceAll("_", " ")} is waiting for a decision.`,
-        url: link(companyPrefix, `/approvals/${event.entityId ?? ""}`),
-      };
-    }
-    case "issue.assignment_wakeup_requested": {
-      const identifier = typeof details.identifier === "string" ? details.identifier : null;
-      return {
-        ...base,
-        title: "Task assigned",
-        body: identifier ? `${identifier} is waiting on you.` : "A task is waiting on you.",
-        url: link(companyPrefix, `/issues/${event.entityId ?? ""}`),
-      };
-    }
-    case "agent.run.failed": {
-      const runRef = shortId(payload.runId);
-      return {
-        ...base,
-        title: "Agent run failed",
-        body: runRef ? `Run ${runRef} failed.` : "An agent run failed.",
-        url: link(companyPrefix, `/issues/${(payload.issueId as string | undefined) ?? event.entityId ?? ""}`),
-      };
-    }
-    case "budget.incident.opened": {
-      const scope = typeof details.scope === "string" ? details.scope : "budget";
-      return {
-        ...base,
-        title: "Budget threshold crossed",
-        body: `A ${scope.replaceAll("_", " ")} incident was opened.`,
-        url: link(companyPrefix, "/activity/budgets"),
-      };
-    }
-    case "issue.created": {
-      const identifier = typeof details.identifier === "string" ? details.identifier : null;
-      const title = typeof details.title === "string" ? details.title : null;
-      return {
-        ...base,
-        title: identifier ? `New task ${identifier}` : "New task",
-        body: title ?? "A task was created.",
-        url: link(companyPrefix, `/issues/${event.entityId ?? ""}`),
-      };
-    }
-    default:
-      return null;
+  let title = template?.title ? renderTemplate(template.title, vars) : draft.title;
+  const body = template?.body ? renderTemplate(template.body, vars) : draft.body;
+
+  // The label is prefixed automatically unless the operator already placed
+  // `{{org}}` themselves, so a custom title never ends up with it twice.
+  const placesItsOwnLabel = (template?.title ?? "").includes("{{org}}");
+  if (presentation?.includeOrganizationLabel && presentation.organizationLabel && !placesItsOwnLabel) {
+    title = `${presentation.organizationLabel} · ${title}`;
   }
+
+  return { eventType, eventId: event.eventId, tag: eventType, title, body, url: draft.url };
 }
 
 /** A subscription row as the fan-out sees it. */

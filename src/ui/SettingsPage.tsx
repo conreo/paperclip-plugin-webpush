@@ -1,15 +1,26 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   usePluginAction,
   usePluginData,
   type PluginSettingsPageProps,
 } from "@paperclipai/plugin-sdk/ui";
+import {
+  TEMPLATE_PLACEHOLDERS,
+  previewDefaults,
+  renderTemplate,
+  sampleTemplateVars,
+  type NotifiableEventType,
+} from "../notifications.js";
 
 type EventTypeOption = { type: string; label: string; defaultEnabled: boolean };
+type NotificationTemplate = { title?: string; body?: string };
 type ClientConfig = {
   vapidPublicKey: string;
   eventTypes: EventTypeOption[];
   notifyUnassignedEvents: boolean;
+  organizationName: string | null;
+  includeOrganizationLabel: boolean;
+  templates: Record<string, NotificationTemplate>;
   throttle: { max: number; windowMinutes: number };
 };
 type Delivery = {
@@ -48,12 +59,7 @@ function pluginUiBase(): string {
   return fallback;
 }
 
-/**
- * The plugin's record id, taken from the path this bundle was served from.
- *
- * The config API is addressed by record id, and the settings page has no other
- * reliable way to learn it: `props.context` carries the company, not the plugin.
- */
+/** The config API is addressed by record id, which only the bundle URL reveals. */
 function pluginRecordId(): string | null {
   return /\/_plugins\/([^/]+)\//.exec(pluginUiBase())?.[1] ?? null;
 }
@@ -70,45 +76,6 @@ function urlBase64ToUint8Array(base64Url: string): Uint8Array<ArrayBuffer> {
   return bytes;
 }
 
-/**
- * Wait until *this* registration has an active worker.
- *
- * `navigator.serviceWorker.ready` is the wrong tool here: it resolves as soon as
- * any worker controls the page, and the host app's own root-scoped `/sw.js`
- * already does. Calling `pushManager.subscribe()` at that point throws
- * "Subscription failed - no active Service Worker" on a first-ever visit, when
- * our freshly registered worker is still installing. On a browser that has
- * visited before the worker is already active, which is exactly why the bug only
- * shows up for new users.
- */
-async function waitForActiveWorker(registration: ServiceWorkerRegistration): Promise<void> {
-  const active = async () => (await navigator.serviceWorker.getRegistration(registration.scope))?.active;
-  if (registration.active) return;
-
-  const worker = registration.installing ?? registration.waiting;
-  if (worker && worker.state !== "activated") {
-    await new Promise<void>((resolve) => {
-      const onStateChange = () => {
-        if (worker.state === "activated") {
-          worker.removeEventListener("statechange", onStateChange);
-          resolve();
-        }
-      };
-      worker.addEventListener("statechange", onStateChange);
-      // A worker that is already activated between the check above and the
-      // listener attach would otherwise hang this promise forever.
-      onStateChange();
-    });
-  }
-
-  const deadline = Date.now() + 15000;
-  while (Date.now() < deadline) {
-    if (await active()) return;
-    await new Promise((resolve) => setTimeout(resolve, 150));
-  }
-  throw new Error("The plugin's service worker did not activate in time. Reload the page and try again.");
-}
-
 function deviceLabel(): string {
   const agent = typeof navigator === "undefined" ? "" : navigator.userAgent;
   if (/Android/i.test(agent)) return "Android device";
@@ -123,14 +90,147 @@ function endpointTail(endpoint: string): string {
   return endpoint.length > 28 ? `…${endpoint.slice(-24)}` : endpoint;
 }
 
-const sectionStyle: React.CSSProperties = { display: "grid", gap: "0.5rem" };
-const mutedStyle: React.CSSProperties = { opacity: 0.7, fontSize: "0.8rem" };
-const rowStyle: React.CSSProperties = {
+/**
+ * Styling mirrors the host's settings layout using its own CSS variables: the
+ * plugin UI may not import host components, and Tailwind only generates the
+ * classes the host's own sources use.
+ */
+const pageStyle = { display: "grid", gap: "2rem", maxWidth: "52rem" } as const;
+const sectionStyle = { display: "grid", gap: "0.75rem" } as const;
+const sectionHeader = { display: "grid", gap: "0.375rem" } as const;
+const headingStyle = { fontSize: "1.125rem", fontWeight: 600, margin: 0 } as const;
+const sectionTitle = { fontSize: "0.875rem", fontWeight: 600, margin: 0 } as const;
+const sectionDescription = {
+  fontSize: "0.875rem",
+  color: "var(--muted-foreground)",
+  margin: 0,
+  maxWidth: "42rem",
+} as const;
+const rowStyle = {
   display: "flex",
+  gap: "1rem",
+  alignItems: "flex-start",
+  justifyContent: "space-between",
+} as const;
+const fieldLabel = { fontSize: "0.875rem", fontWeight: 600, margin: 0 } as const;
+const fieldHint = {
+  fontSize: "0.8125rem",
+  color: "var(--muted-foreground)",
+  margin: 0,
+  maxWidth: "42rem",
+} as const;
+const inputStyle = {
+  width: "100%",
+  padding: "0.375rem 0.5rem",
+  fontSize: "0.875rem",
+  fontFamily: "inherit",
+  color: "var(--foreground)",
+  background: "var(--background)",
+  border: "1px solid var(--input)",
+  borderRadius: "var(--radius-md)",
+} as const;
+const primaryButtonStyle = {
+  padding: "0.4rem 0.75rem",
+  fontSize: "0.875rem",
+  fontWeight: 500,
+  color: "var(--primary-foreground)",
+  background: "var(--primary)",
+  border: "1px solid transparent",
+  borderRadius: "var(--radius-md)",
+  cursor: "pointer",
+} as const;
+const secondaryButtonStyle = {
+  ...primaryButtonStyle,
+  color: "var(--foreground)",
+  background: "var(--background)",
+  border: "1px solid var(--border)",
+} as const;
+const checkboxStyle = {
+  accentColor: "var(--primary)",
+  width: "1rem",
+  height: "1rem",
+  marginTop: "0.125rem",
+  flexShrink: 0,
+} as const;
+const cardStyle = {
+  display: "grid",
   gap: "0.5rem",
-  alignItems: "center",
-  flexWrap: "wrap",
-};
+  padding: "0.75rem",
+  border: "1px solid var(--border)",
+  borderRadius: "var(--radius-lg)",
+  background: "var(--card)",
+} as const;
+const subHeadingStyle = {
+  fontSize: "0.75rem",
+  fontWeight: 500,
+  letterSpacing: "0.05em",
+  textTransform: "uppercase" as const,
+  color: "var(--muted-foreground)",
+  margin: 0,
+} as const;
+const noticeStyle = { fontSize: "0.8125rem" } as const;
+const errorStyle = {
+  fontSize: "0.8125rem",
+  color: "var(--destructive)",
+  whiteSpace: "pre-wrap" as const,
+} as const;
+const buttonRowStyle = { display: "flex", flexWrap: "wrap" as const, gap: "0.5rem" } as const;
+
+function Section({
+  title,
+  description,
+  children,
+  testId,
+}: {
+  title: string;
+  description?: string;
+  children: React.ReactNode;
+  testId?: string;
+}) {
+  return (
+    <section style={sectionStyle} data-testid={testId}>
+      <div style={sectionHeader}>
+        <h2 style={sectionTitle}>{title}</h2>
+        {description ? <p style={sectionDescription}>{description}</p> : null}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function ToggleRow({
+  title,
+  description,
+  checked,
+  disabled,
+  onChange,
+  testId,
+}: {
+  title: string;
+  description: string;
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (next: boolean) => void;
+  testId?: string;
+}) {
+  return (
+    <label style={{ ...rowStyle, cursor: disabled ? "default" : "pointer" }}>
+      <span style={{ display: "grid", gap: "0.25rem" }}>
+        <span style={fieldLabel}>{title}</span>
+        <span style={fieldHint}>{description}</span>
+      </span>
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.checked)}
+        style={checkboxStyle}
+        data-testid={testId}
+        aria-label={title}
+      />
+    </label>
+  );
+}
 
 export function SettingsPage(props: PluginSettingsPageProps) {
   const { data: config } = usePluginData<ClientConfig>("client-config");
@@ -148,9 +248,13 @@ export function SettingsPage(props: PluginSettingsPageProps) {
     typeof Notification === "undefined" ? "unsupported" : Notification.permission,
   );
   const [currentEndpoint, setCurrentEndpoint] = useState<string | null>(null);
+
   const [defaultTriggers, setDefaultTriggers] = useState<string[] | null>(null);
   const [notifyUnassigned, setNotifyUnassigned] = useState<boolean | null>(null);
-  const [configSaving, setConfigSaving] = useState(false);
+  const [organizationLabel, setOrganizationLabel] = useState<string | null>(null);
+  const [includeOrganizationLabel, setIncludeOrganizationLabel] = useState<boolean | null>(null);
+  const [templates, setTemplates] = useState<Record<string, NotificationTemplate> | null>(null);
+  const [saving, setSaving] = useState(false);
   const [configNotice, setConfigNotice] = useState<string | null>(null);
   const [configError, setConfigError] = useState<string | null>(null);
 
@@ -158,54 +262,22 @@ export function SettingsPage(props: PluginSettingsPageProps) {
   const swSupported = typeof navigator !== "undefined" && "serviceWorker" in navigator;
   const pushSupported = typeof window !== "undefined" && "PushManager" in window;
 
+  // Seed the editable draft from what the worker reports as saved.
+  useEffect(() => {
+    if (!config) return;
+    setDefaultTriggers(
+      (current) => current ?? config.eventTypes.filter((option) => option.defaultEnabled).map((option) => option.type),
+    );
+    setNotifyUnassigned((current) => current ?? config.notifyUnassignedEvents);
+    setOrganizationLabel((current) => current ?? config.organizationName ?? "");
+    setIncludeOrganizationLabel((current) => current ?? config.includeOrganizationLabel);
+    setTemplates((current) => current ?? { ...config.templates });
+  }, [config]);
+
   const refreshDevices = useCallback(async () => {
     const result = (await listDevices({})) as DevicesResult;
     setDevices(result.devices ?? []);
   }, [listDevices]);
-
-  useEffect(() => {
-    if (!config || defaultTriggers !== null) return;
-    setDefaultTriggers(config.eventTypes.filter((option) => option.defaultEnabled).map((option) => option.type));
-    setNotifyUnassigned(config.notifyUnassignedEvents);
-  }, [config, defaultTriggers]);
-
-  const saveOrganizationDefaults = useCallback(async () => {
-    const pluginId = pluginRecordId();
-    const companyId = props.context.companyId;
-    if (!pluginId || !companyId || defaultTriggers === null || notifyUnassigned === null) {
-      setConfigError("Could not determine the plugin or the active company.");
-      return;
-    }
-
-    setConfigSaving(true);
-    setConfigError(null);
-    setConfigNotice(null);
-    try {
-      // The whole object is replaced, so both keys are sent every time.
-      const response = await fetch(`/api/plugins/${encodeURIComponent(pluginId)}/config`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          companyId,
-          configJson: { defaultTriggers, notifyUnassignedEvents: notifyUnassigned },
-        }),
-      });
-      if (!response.ok) {
-        if (response.status === 403) {
-          throw new Error(
-            "Only an instance admin can change organization defaults. Individual devices keep their own checkboxes below.",
-          );
-        }
-        const detail = await response.text().catch(() => "");
-        throw new Error(`Save failed (HTTP ${response.status})${detail ? `: ${detail.slice(0, 160)}` : ""}`);
-      }
-      setConfigNotice("Saved. A browser enabled from now on starts with these triggers.");
-    } catch (cause) {
-      setConfigError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setConfigSaving(false);
-    }
-  }, [defaultTriggers, notifyUnassigned, props.context.companyId]);
 
   const readExistingSubscription = useCallback(async () => {
     if (!swSupported) return;
@@ -218,6 +290,69 @@ export function SettingsPage(props: PluginSettingsPageProps) {
     void refreshDevices().catch((cause: unknown) => setError(String(cause)));
     void readExistingSubscription();
   }, [readExistingSubscription, refreshDevices]);
+
+  /**
+   * Save the whole configuration object.
+   *
+   * The host replaces `configJson` wholesale, so both sections send every key —
+   * otherwise saving notification text would clear the trigger defaults.
+   */
+  const saveConfig = useCallback(async () => {
+    const pluginId = pluginRecordId();
+    const companyId = props.context.companyId;
+    if (!pluginId || !companyId || defaultTriggers === null || notifyUnassigned === null) {
+      setConfigError("Could not determine the plugin or the active company.");
+      return;
+    }
+
+    const prunedTemplates: Record<string, NotificationTemplate> = {};
+    for (const [eventType, template] of Object.entries(templates ?? {})) {
+      const title = template.title?.trim();
+      const body = template.body?.trim();
+      if (title || body) prunedTemplates[eventType] = { ...(title ? { title } : {}), ...(body ? { body } : {}) };
+    }
+
+    setSaving(true);
+    setConfigError(null);
+    setConfigNotice(null);
+    try {
+      const response = await fetch(`/api/plugins/${encodeURIComponent(pluginId)}/config`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          companyId,
+          configJson: {
+            defaultTriggers,
+            notifyUnassignedEvents: notifyUnassigned,
+            ...(organizationLabel?.trim() ? { organizationLabel: organizationLabel.trim() } : {}),
+            includeOrganizationLabel: includeOrganizationLabel ?? true,
+            templates: prunedTemplates,
+          },
+        }),
+      });
+      if (!response.ok) {
+        if (response.status === 403) {
+          throw new Error(
+            "Only an instance admin can change these settings. Individual devices keep their own checkboxes below.",
+          );
+        }
+        const detail = await response.text().catch(() => "");
+        throw new Error(`Save failed (HTTP ${response.status})${detail ? `: ${detail.slice(0, 160)}` : ""}`);
+      }
+      setConfigNotice("Saved.");
+    } catch (cause) {
+      setConfigError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setSaving(false);
+    }
+  }, [
+    defaultTriggers,
+    includeOrganizationLabel,
+    notifyUnassigned,
+    organizationLabel,
+    props.context.companyId,
+    templates,
+  ]);
 
   const enable = useCallback(async () => {
     setBusy(true);
@@ -266,7 +401,7 @@ export function SettingsPage(props: PluginSettingsPageProps) {
 
       setDevices(registered.devices ?? []);
       setCurrentEndpoint(subscription.endpoint);
-      setNotice("This browser is now registered. Send a test notification to confirm delivery.");
+      setNotice("This browser is registered. Send a test notification to confirm delivery.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -368,76 +503,104 @@ export function SettingsPage(props: PluginSettingsPageProps) {
   );
 
   const thisBrowserRegistered = devices.some((device) => device.endpoint === currentEndpoint);
+  const effectiveLabel = organizationLabel?.trim() || config?.organizationName || "Your organization";
+  const showLabel = includeOrganizationLabel ?? true;
+
+  /** A faithful preview of one trigger, rendered with sample placeholder values. */
+  const preview = useMemo(() => {
+    return (eventType: string) => {
+      const defaults = previewDefaults(eventType as NotifiableEventType);
+      const vars = sampleTemplateVars(eventType as NotifiableEventType, effectiveLabel);
+      const template = templates?.[eventType];
+      const title = template?.title?.trim() ? renderTemplate(template.title, vars) : defaults.title;
+      const body = template?.body?.trim() ? renderTemplate(template.body, vars) : defaults.body;
+      const placesOwnLabel = (template?.title ?? "").includes("{{org}}");
+      return {
+        title: showLabel && !placesOwnLabel ? `${effectiveLabel} · ${title}` : title,
+        body,
+      };
+    };
+  }, [effectiveLabel, showLabel, templates]);
+
+  const setTemplateField = (eventType: string, field: "title" | "body", value: string) => {
+    setTemplates((current) => ({
+      ...(current ?? {}),
+      [eventType]: { ...(current?.[eventType] ?? {}), [field]: value },
+    }));
+  };
 
   return (
-    <div style={{ display: "grid", gap: "1.5rem", maxWidth: "48rem" }}>
-      <header style={sectionStyle}>
-        <h2 style={{ margin: 0, fontSize: "1.05rem" }}>Notifications on this browser</h2>
-        <div style={mutedStyle}>
-          {secureContext ? "HTTPS origin" : "insecure origin"} · permission: {permission} ·{" "}
-          {pushSupported && swSupported ? "Push API available" : "Push API unavailable"}
-        </div>
-      </header>
+    <div style={pageStyle}>
+      <div style={{ display: "grid", gap: "0.375rem" }}>
+        <h1 style={headingStyle}>Notifications</h1>
+        <p style={sectionDescription}>
+          Delivered by this browser's own push service, so they arrive with the Paperclip tab closed.
+          {secureContext ? "" : " This origin is not a secure context, so push is unavailable here."}
+          {typeof Notification === "undefined" ? "" : ` Permission: ${permission}.`}
+        </p>
+      </div>
 
-      {notice ? <div style={{ fontSize: "0.85rem" }}>{notice}</div> : null}
-      {error ? (
-        <div style={{ fontSize: "0.85rem", color: "crimson", whiteSpace: "pre-wrap" }}>{error}</div>
-      ) : null}
+      {notice ? <div style={noticeStyle}>{notice}</div> : null}
+      {error ? <div style={errorStyle}>{error}</div> : null}
 
-      <section style={sectionStyle}>
-        <div style={rowStyle}>
-          <button type="button" onClick={enable} disabled={busy || !config}>
+      <Section
+        title="This browser"
+        description="Registering a browser creates a push subscription and stores it against your account, not against one organization."
+      >
+        <div style={buttonRowStyle}>
+          <button
+            type="button"
+            style={primaryButtonStyle}
+            onClick={enable}
+            disabled={busy || !config}
+            data-testid="enable-notifications"
+          >
             {thisBrowserRegistered ? "Re-register this browser" : "Enable notifications"}
           </button>
-          <button type="button" onClick={() => void runTest()} disabled={busy || devices.length === 0}>
+          <button
+            type="button"
+            style={secondaryButtonStyle}
+            onClick={() => void runTest()}
+            disabled={busy || devices.length === 0}
+          >
             Send test notification
           </button>
           {currentEndpoint ? (
-            <button type="button" onClick={disable} disabled={busy}>
+            <button type="button" style={secondaryButtonStyle} onClick={disable} disabled={busy}>
               Turn off for this browser
             </button>
           ) : null}
-          <button type="button" onClick={() => void refreshDevices()} disabled={busy}>
-            Refresh
-          </button>
         </div>
         {config ? (
-          <div style={mutedStyle}>
-            At most {config.throttle.max} notifications per device every {config.throttle.windowMinutes}{" "}
-            minutes; extras are recorded as throttled.
-          </div>
+          <p style={fieldHint}>
+            At most {config.throttle.max} notifications per device every {config.throttle.windowMinutes} minutes;
+            anything beyond that is recorded as throttled.
+          </p>
         ) : null}
-      </section>
+      </Section>
 
-      <section style={sectionStyle}>
-        <strong style={{ fontSize: "0.9rem" }}>Registered devices ({devices.length})</strong>
+      <Section
+        title={`Registered devices (${devices.length})`}
+        description="One entry per browser profile that enabled notifications."
+      >
         {devices.length === 0 ? (
-          <div style={mutedStyle}>
-            No device is registered for your account yet. Devices are per person, not per
-            company: once registered, this browser receives alerts for anything you are
-            responsible for, in every company.
-          </div>
+          <p style={fieldHint}>No device is registered for your account yet.</p>
         ) : null}
-
         {devices.map((device) => (
           <div
             key={device.endpoint}
+            style={cardStyle}
             data-testid="device-row"
             data-device-current={device.endpoint === currentEndpoint ? "true" : "false"}
-            style={{
-              border: "1px solid currentColor",
-              borderRadius: "0.5rem",
-              padding: "0.75rem",
-              display: "grid",
-              gap: "0.5rem",
-            }}
           >
-            <div style={rowStyle}>
-              <strong style={{ fontSize: "0.85rem" }}>
+            <div style={{ ...rowStyle, alignItems: "center" }}>
+              <span style={fieldLabel}>
                 {device.endpoint === currentEndpoint ? "This browser" : "Another device"}
-              </strong>
-              <code style={{ fontSize: "0.72rem", opacity: 0.7 }}>{endpointTail(device.endpoint)}</code>
-              <span style={{ ...mutedStyle, marginLeft: "auto" }}>
+              </span>
+              <code style={{ fontSize: "0.72rem", color: "var(--muted-foreground)" }}>
+                {endpointTail(device.endpoint)}
+              </code>
+              <span style={{ ...fieldHint, marginLeft: "auto" }}>
                 {device.deliveries[0]
                   ? `last: ${device.deliveries[0].status} ${device.deliveries[0].eventType}`
                   : "no deliveries yet"}
@@ -448,30 +611,49 @@ export function SettingsPage(props: PluginSettingsPageProps) {
               {(config?.eventTypes ?? []).map((option) => {
                 const checked = device.eventTypes.includes(option.type);
                 return (
-                  <label key={option.type} style={{ fontSize: "0.8rem", display: "flex", gap: "0.4rem" }}>
+                  <label key={option.type} style={{ ...rowStyle, alignItems: "center", cursor: "pointer" }}>
+                    <span style={{ fontSize: "0.8125rem" }}>{option.label}</span>
                     <input
                       type="checkbox"
                       checked={checked}
                       disabled={busy}
                       onChange={() => void toggleEventType(device, option.type)}
+                      style={checkboxStyle}
+                      aria-label={option.label}
                     />
-                    <span>{option.label}</span>
                   </label>
                 );
               })}
             </div>
 
-            <div style={rowStyle}>
-              <button type="button" onClick={() => void runTest(device.endpoint)} disabled={busy}>
+            <div style={buttonRowStyle}>
+              <button
+                type="button"
+                style={secondaryButtonStyle}
+                onClick={() => void runTest(device.endpoint)}
+                disabled={busy}
+              >
                 Test this device
               </button>
-              <button type="button" onClick={() => void remove(device.endpoint)} disabled={busy}>
+              <button
+                type="button"
+                style={secondaryButtonStyle}
+                onClick={() => void remove(device.endpoint)}
+                disabled={busy}
+              >
                 Remove
               </button>
             </div>
 
             {device.deliveries.length > 0 ? (
-              <ul style={{ margin: 0, paddingLeft: "1.1rem", fontSize: "0.72rem", opacity: 0.75 }}>
+              <ul
+                style={{
+                  margin: 0,
+                  paddingLeft: "1.1rem",
+                  fontSize: "0.72rem",
+                  color: "var(--muted-foreground)",
+                }}
+              >
                 {device.deliveries.map((delivery, index) => (
                   <li key={`${delivery.createdAt}-${index}`}>
                     {delivery.status} · {delivery.eventType}
@@ -483,25 +665,105 @@ export function SettingsPage(props: PluginSettingsPageProps) {
             ) : null}
           </div>
         ))}
-      </section>
+      </Section>
 
-      <section style={sectionStyle} data-testid="org-defaults">
-        <strong style={{ fontSize: "0.9rem" }}>Organization defaults</strong>
-        <div style={mutedStyle}>
-          Applies to the organization you are viewing now. These are the triggers a browser starts
-          with when someone clicks Enable notifications; each device can still change them
-          afterwards. Saving needs an instance admin.
+      <Section
+        title="Notification content"
+        description="What each notification says. Leave a field empty to keep the built-in wording; placeholders are filled in when the notification is sent."
+        testId="notification-content"
+      >
+        <div style={{ display: "grid", gap: "0.5rem" }}>
+          <label style={{ display: "grid", gap: "0.25rem" }}>
+            <span style={fieldLabel}>Organization name in notifications</span>
+            <span style={fieldHint}>
+              Defaults to the organization's own name
+              {config?.organizationName ? ` (${config.organizationName})` : ""}.
+            </span>
+            <input
+              type="text"
+              value={organizationLabel ?? ""}
+              placeholder={config?.organizationName ?? "Your organization"}
+              onChange={(event) => setOrganizationLabel(event.target.value)}
+              style={inputStyle}
+              data-testid="org-label"
+            />
+          </label>
+
+          <ToggleRow
+            title="Show the organization name"
+            description="Prefixes notification titles, so a notification is attributable when you follow more than one organization."
+            checked={showLabel}
+            disabled={saving}
+            onChange={setIncludeOrganizationLabel}
+            testId="include-org-label"
+          />
         </div>
 
+        <p style={subHeadingStyle}>Per notification</p>
+
+        {(config?.eventTypes ?? []).map((option) => {
+          const defaults = previewDefaults(option.type as NotifiableEventType);
+          const placeholders = TEMPLATE_PLACEHOLDERS[option.type as NotifiableEventType] ?? [];
+          const shown = preview(option.type);
+          return (
+            <div key={option.type} style={cardStyle}>
+              <span style={fieldLabel}>{option.label}</span>
+              <div style={{ display: "grid", gap: "0.375rem" }}>
+                <input
+                  type="text"
+                  value={templates?.[option.type]?.title ?? ""}
+                  placeholder={defaults.title}
+                  onChange={(event) => setTemplateField(option.type, "title", event.target.value)}
+                  style={inputStyle}
+                  aria-label={`${option.label} notification title`}
+                  data-testid={`template-title-${option.type}`}
+                />
+                <input
+                  type="text"
+                  value={templates?.[option.type]?.body ?? ""}
+                  placeholder={defaults.body}
+                  onChange={(event) => setTemplateField(option.type, "body", event.target.value)}
+                  style={inputStyle}
+                  aria-label={`${option.label} notification body`}
+                  data-testid={`template-body-${option.type}`}
+                />
+              </div>
+              <p style={fieldHint}>
+                Placeholders: {["org", ...placeholders].map((name) => `{{${name}}}`).join(" ")} · Preview:{" "}
+                <strong style={{ color: "var(--foreground)" }}>{shown.title}</strong> — {shown.body}
+              </p>
+            </div>
+          );
+        })}
+
+        <div style={buttonRowStyle}>
+          <button
+            type="button"
+            style={primaryButtonStyle}
+            onClick={() => void saveConfig()}
+            disabled={saving || defaultTriggers === null}
+            data-testid="save-notification-content"
+          >
+            {saving ? "Saving…" : "Save notification content"}
+          </button>
+        </div>
+      </Section>
+
+      <Section
+        title="Organization defaults"
+        description="The triggers a browser starts with when someone clicks Enable notifications. Each device can still change its own set afterwards."
+        testId="org-defaults"
+      >
         <div style={{ display: "grid", gap: "0.25rem" }}>
           {(config?.eventTypes ?? []).map((option) => {
             const checked = (defaultTriggers ?? []).includes(option.type);
             return (
-              <label key={option.type} style={{ fontSize: "0.8rem", display: "flex", gap: "0.4rem" }}>
+              <label key={option.type} style={{ ...rowStyle, alignItems: "center", cursor: "pointer" }}>
+                <span style={{ fontSize: "0.8125rem" }}>{option.label}</span>
                 <input
                   type="checkbox"
                   checked={checked}
-                  disabled={configSaving || defaultTriggers === null}
+                  disabled={saving || defaultTriggers === null}
                   onChange={() =>
                     setDefaultTriggers((current) => {
                       const list = current ?? [];
@@ -510,47 +772,84 @@ export function SettingsPage(props: PluginSettingsPageProps) {
                         : [...list, option.type];
                     })
                   }
+                  style={checkboxStyle}
+                  aria-label={option.label}
                 />
-                <span>{option.label}</span>
               </label>
             );
           })}
         </div>
 
-        <label style={{ fontSize: "0.8rem", display: "flex", gap: "0.4rem" }}>
-          <input
-            type="checkbox"
-            data-testid="notify-unassigned"
-            checked={notifyUnassigned ?? true}
-            disabled={configSaving || notifyUnassigned === null}
-            onChange={(event) => setNotifyUnassigned(event.target.checked)}
-          />
-          <span>Also notify about events that name nobody responsible</span>
-        </label>
+        <ToggleRow
+          title="Also notify about events that name nobody responsible"
+          description="When off, only events that name a responsible user notify anyone."
+          checked={notifyUnassigned ?? true}
+          disabled={saving || notifyUnassigned === null}
+          onChange={setNotifyUnassigned}
+          testId="notify-unassigned"
+        />
 
-        <div style={rowStyle}>
+        <div style={buttonRowStyle}>
           <button
             type="button"
+            style={primaryButtonStyle}
+            onClick={() => void saveConfig()}
+            disabled={saving || defaultTriggers === null || notifyUnassigned === null}
             data-testid="save-org-defaults"
-            onClick={() => void saveOrganizationDefaults()}
-            disabled={configSaving || defaultTriggers === null || notifyUnassigned === null}
           >
-            {configSaving ? "Saving…" : "Save organization defaults"}
+            {saving ? "Saving…" : "Save organization defaults"}
           </button>
         </div>
-        {configNotice ? <div style={{ fontSize: "0.8rem" }}>{configNotice}</div> : null}
-        {configError ? (
-          <div style={{ fontSize: "0.8rem", color: "crimson" }}>{configError}</div>
-        ) : null}
-      </section>
+        <p style={fieldHint}>Saving any of these settings requires an instance admin.</p>
+        {configNotice ? <div style={noticeStyle}>{configNotice}</div> : null}
+        {configError ? <div style={errorStyle}>{configError}</div> : null}
+      </Section>
 
-      <section style={{ ...sectionStyle, ...mutedStyle }}>
-        <div>
-          Notifications are delivered by the browser's own push service, so they arrive even when the
-          Paperclip tab is closed. iOS Safari only supports Web Push for sites added to the Home
-          Screen.
-        </div>
-      </section>
+      <p style={fieldHint}>
+        Notifications arrive through the browser's push service, so they reach you with the app closed. iOS Safari
+        only delivers Web Push to a site added to the Home Screen. The toolbar's fullscreen button gives an
+        immersive window in browsers that cannot install the app — for example a private, tailnet-only origin.
+      </p>
     </div>
   );
+}
+
+/**
+ * Wait until *this* registration has an active worker.
+ *
+ * `navigator.serviceWorker.ready` is the wrong tool here: it resolves as soon as
+ * any worker controls the page, and the host app's own root-scoped `/sw.js`
+ * already does. Calling `pushManager.subscribe()` at that point throws
+ * "Subscription failed - no active Service Worker" on a first-ever visit, when
+ * our freshly registered worker is still installing. On a browser that has
+ * visited before the worker is already active, which is exactly why the bug only
+ * shows up for new users.
+ */
+async function waitForActiveWorker(registration: ServiceWorkerRegistration): Promise<void> {
+  const active = async () =>
+    (await navigator.serviceWorker.getRegistration(registration.scope))?.active;
+  if (registration.active) return;
+
+  const worker = registration.installing ?? registration.waiting;
+  if (worker && worker.state !== "activated") {
+    await new Promise<void>((resolve) => {
+      const onStateChange = () => {
+        if (worker.state === "activated") {
+          worker.removeEventListener("statechange", onStateChange);
+          resolve();
+        }
+      };
+      worker.addEventListener("statechange", onStateChange);
+      // A worker that is already activated between the check above and the
+      // listener attach would otherwise hang this promise forever.
+      onStateChange();
+    });
+  }
+
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    if (await active()) return;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  throw new Error("The plugin's service worker did not activate in time. Reload the page and try again.");
 }

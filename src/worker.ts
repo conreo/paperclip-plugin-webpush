@@ -9,10 +9,12 @@ import {
   isNotifiableEventType,
   planDelivery,
   resolvePluginConfig,
+  resolvePresentation,
   resolveVapidSubject,
   responsibleUserIdOf,
   shouldThrottle,
   type NotificationPayload,
+  type NotificationPresentation,
   type SubscriptionTarget,
 } from "./notifications.js";
 import {
@@ -53,21 +55,27 @@ const RETENTION = { deliveryDays: 30, staleFailureCount: 5, staleDays: 7 };
 const FALLBACK_VAPID_SUBJECT = "mailto:webpush@paperclip.local";
 
 /**
- * Company route prefixes change almost never and are read on every event, so a
- * process-local cache keeps the fan-out free of a host call per notification.
+ * Company name and route prefix. Both change almost never and are read on every
+ * event, so a process-local cache keeps the fan-out free of a host call per
+ * notification.
  */
-const companyPrefixCache = new Map<string, string | null>();
+type CompanyInfo = { prefix: string | null; name: string | null };
+const companyInfoCache = new Map<string, CompanyInfo>();
 
-async function companyPrefix(ctx: PluginContext, companyId: string): Promise<string | null> {
-  if (companyPrefixCache.has(companyId)) return companyPrefixCache.get(companyId) ?? null;
+async function companyInfo(ctx: PluginContext, companyId: string): Promise<CompanyInfo> {
+  const cached = companyInfoCache.get(companyId);
+  if (cached) return cached;
   try {
     const company = await ctx.companies.get(companyId);
-    const prefix = company?.issuePrefix?.trim() || null;
-    companyPrefixCache.set(companyId, prefix);
-    return prefix;
+    const info: CompanyInfo = {
+      prefix: company?.issuePrefix?.trim() || null,
+      name: company?.name?.trim() || null,
+    };
+    companyInfoCache.set(companyId, info);
+    return info;
   } catch (error) {
-    ctx.logger.warn(`company prefix lookup failed for ${companyId}: ${String(error)}`);
-    return null;
+    ctx.logger.warn(`company lookup failed for ${companyId}: ${String(error)}`);
+    return { prefix: null, name: null };
   }
 }
 
@@ -78,14 +86,25 @@ async function companyPrefix(ctx: PluginContext, companyId: string): Promise<str
  * a cached value would delay an operator's change with no visible reason. A
  * failure to read is not fatal — the defaults are what the plugin ships with.
  */
-async function companyConfig(ctx: PluginContext, companyId: string | null) {
-  if (!companyId) return resolvePluginConfig(null);
+async function readConfig(ctx: PluginContext, companyId: string | null): Promise<unknown> {
+  if (!companyId) return null;
   try {
-    return resolvePluginConfig(await ctx.config.get(companyId));
+    return await ctx.config.get(companyId);
   } catch (error) {
     ctx.logger.warn(`could not read plugin config for ${companyId}: ${String(error)}`);
-    return resolvePluginConfig(null);
+    return null;
   }
+}
+
+/** Everything the fan-out needs about one company, from a single config read. */
+async function companySettings(ctx: PluginContext, companyId: string | null) {
+  const [raw, info] = await Promise.all([readConfig(ctx, companyId), companyId ? companyInfo(ctx, companyId) : null]);
+  const resolved = info ?? { prefix: null, name: null };
+  return {
+    config: resolvePluginConfig(raw),
+    presentation: resolvePresentation(raw, resolved.name),
+    prefix: resolved.prefix,
+  };
 }
 
 /**
@@ -179,10 +198,12 @@ async function describeDevice(
 
 /** Fan one event out to the devices that should hear about it. */
 async function fanOut(ctx: PluginContext, db: PluginDb, event: PluginEvent): Promise<void> {
-  const notification = buildNotification(event, await companyPrefix(ctx, event.companyId));
+  const settings = await companySettings(ctx, event.companyId);
+  const config = settings.config;
+
+  const notification = buildNotification(event, settings.prefix, settings.presentation);
   if (!notification) return;
 
-  const config = await companyConfig(ctx, event.companyId);
   const responsibleUserId = responsibleUserIdOf(event);
 
   // An event that names a responsible user goes to that person's devices in any
@@ -301,10 +322,11 @@ const plugin = definePlugin({
     /** Public client configuration: no secrets, safe for any board user. */
     ctx.data.register("client-config", async (params) => {
       const companyId = typeof params.companyId === "string" ? params.companyId : null;
-      const [vapid, config] = await Promise.all([
+      const [vapid, settings] = await Promise.all([
         ensureVapidKeypair(db),
-        companyConfig(ctx, companyId),
+        companySettings(ctx, companyId),
       ]);
+      const config = settings.config;
       return {
         vapidPublicKey: vapid.publicKey,
         // The checkbox set is the company's configured default, so a saved change
@@ -315,6 +337,10 @@ const plugin = definePlugin({
           defaultEnabled: config.defaultTriggers.includes(type),
         })),
         notifyUnassignedEvents: config.notifyUnassignedEvents,
+        // Notification wording, so the settings page can show and edit what is saved.
+        organizationName: settings.presentation.organizationLabel,
+        includeOrganizationLabel: settings.presentation.includeOrganizationLabel,
+        templates: settings.presentation.templates,
         throttle: THROTTLE,
       };
     });
@@ -335,7 +361,7 @@ const plugin = definePlugin({
       const subscription = parseSubscriptionInput(params.subscription);
       if (!subscription) throw new Error("A valid push subscription is required.");
 
-      const config = await companyConfig(ctx, companyId);
+      const config = (await companySettings(ctx, companyId)).config;
 
       await upsertSubscription(db, {
         userId,

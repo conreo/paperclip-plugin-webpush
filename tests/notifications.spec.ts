@@ -5,7 +5,10 @@ import {
   activeUserMemberIds,
   NOTIFIABLE_EVENT_TYPES,
   buildNotification,
+  previewDefaults,
+  renderTemplate,
   resolvePluginConfig,
+  resolvePresentation,
   resolveVapidSubject,
   planDelivery,
   shouldThrottle,
@@ -285,6 +288,120 @@ describe("activeUserMemberIds", () => {
       ]),
     ).toEqual(["user-1"]);
     expect(activeUserMemberIds([])).toEqual([]);
+  });
+});
+
+describe("renderTemplate", () => {
+  it("substitutes values and tolerates spacing", () => {
+    expect(renderTemplate("{{org}} · {{ identifier }}", { org: "Acme", identifier: "ACME-42" })).toBe(
+      "Acme · ACME-42",
+    );
+  });
+
+  it("empties a valid placeholder that this event has no value for", () => {
+    // `null` means "known name, no value here" — the operator must not read
+    // `{{identifier}}` in an actual notification.
+    expect(renderTemplate("{{identifier}} is waiting", { identifier: null })).toBe(" is waiting");
+  });
+
+  it("keeps an unknown placeholder verbatim so a typo is visible", () => {
+    expect(renderTemplate("{{org}} {{oops}}", { org: "Acme" })).toBe("Acme {{oops}}");
+  });
+
+  it("treats an empty string as no value for a known name", () => {
+    expect(renderTemplate("[{{org}}]", { org: "" })).toBe("[{{org}}]");
+  });
+});
+
+describe("resolvePresentation", () => {
+  it("defaults to the organization name and to showing it", () => {
+    const presentation = resolvePresentation(null, "Acme");
+    expect(presentation).toMatchObject({ organizationLabel: "Acme", includeOrganizationLabel: true });
+    expect(presentation.templates).toEqual({});
+  });
+
+  it("prefers a configured label and honours the toggle", () => {
+    const presentation = resolvePresentation(
+      { organizationLabel: "  Acme Ops  ", includeOrganizationLabel: false },
+      "Acme",
+    );
+    expect(presentation.organizationLabel).toBe("Acme Ops");
+    expect(presentation.includeOrganizationLabel).toBe(false);
+  });
+
+  it("keeps only usable templates for triggers it can deliver", () => {
+    const presentation = resolvePresentation(
+      {
+        templates: {
+          "approval.created": { title: "Sign this", body: "  " },
+          "issue.created": { body: "{{identifier}}: {{title}}" },
+          "not.a.trigger": { title: "ignored" },
+          "agent.run.failed": {},
+        },
+      },
+      "Acme",
+    );
+    expect(presentation.templates).toEqual({
+      "approval.created": { title: "Sign this", body: undefined },
+      "issue.created": { title: undefined, body: "{{identifier}}: {{title}}" },
+    });
+  });
+
+  it("ignores a non-boolean toggle rather than treating words as true", () => {
+    expect(resolvePresentation({ includeOrganizationLabel: "false" }, "Acme").includeOrganizationLabel).toBe(true);
+  });
+});
+
+describe("buildNotification with configured text", () => {
+  const presentation = (overrides: Partial<Parameters<typeof buildNotification>[2]> = {}) => ({
+    organizationLabel: "Acme",
+    includeOrganizationLabel: true,
+    templates: {},
+    ...overrides,
+  });
+
+  it("prefixes the organization name", () => {
+    const notification = buildNotification(event(), "ACME", presentation());
+    expect(notification?.title).toBe("Acme · Approval needed");
+  });
+
+  it("uses an operator title and body, with placeholders filled", () => {
+    const notification = buildNotification(
+      event({ payload: { details: { identifier: "ACME-7", title: "Ship it" } } , eventType: "issue.created" }),
+      "ACME",
+      presentation({ templates: { "issue.created": { title: "{{org}}: new task", body: "{{identifier}} {{title}}" } } }),
+    );
+    // `{{org}}` is substituted, and the automatic label prefix is skipped because
+    // the operator placed the label themselves.
+    expect(notification?.title).toBe("Acme: new task");
+    expect(notification?.body).toBe("ACME-7 Ship it");
+  });
+
+  it("does not prefix the label twice when the title already places it", () => {
+    const notification = buildNotification(
+      event(),
+      "ACME",
+      presentation({ templates: { "approval.created": { title: "{{org}} needs you" } } }),
+    );
+    expect(notification?.title).toBe("Acme needs you");
+  });
+
+  it("falls back to the built-in wording when a template is absent", () => {
+    const notification = buildNotification(event(), "ACME", presentation({ templates: {} }));
+    expect(notification?.title).toBe("Acme · Approval needed");
+    expect(notification?.body).toBe("A request is waiting for a decision.");
+  });
+
+  it("can omit the label entirely", () => {
+    const notification = buildNotification(event(), "ACME", presentation({ includeOrganizationLabel: false }));
+    expect(notification?.title).toBe("Approval needed");
+  });
+
+  it("previews the built-in wording for the settings page", () => {
+    expect(previewDefaults("approval.created")).toEqual({
+      title: "Approval needed",
+      body: "A request is waiting for a decision.",
+    });
   });
 });
 

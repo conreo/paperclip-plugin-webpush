@@ -224,7 +224,24 @@ plugin-owned state, could be written by any board member through a plugin action
 The settings page reads them back through the worker, so a saved change is visible
 immediately and applies to browsers enabled from then on.
 
-These are the only two, and the omissions are deliberate rather than unfinished:
+**Notification wording** is configurable too, in the same section:
+
+- **Organization name** — what notifications call your organization. Defaults to the
+  organization's own name.
+- **Show the organization name** — prefixes notification titles, so a notification is
+  attributable when you follow several organizations.
+- **Per notification** — a title and a body for each trigger. Empty fields keep the
+  built-in wording; the settings page shows that wording as placeholder text and
+  renders a live preview beside every field.
+
+Placeholders are filled in when the notification is sent: `{{org}}` everywhere, plus
+`{{identifier}}` and `{{title}}` for new tasks, `{{type}}` for approvals, `{{scope}}`
+for budget incidents, and `{{run}}` for failed runs. A valid placeholder with no value
+for that event (an approval has no issue identifier) renders as nothing, while an
+unknown name is left verbatim so a typo is visible in the preview. If a custom title
+already places `{{org}}` itself, the automatic prefix is skipped rather than doubled.
+
+The omissions are deliberate rather than unfinished:
 
 - **The throttle (12 per device per 5 minutes) is not configurable**, because it
   counts a device across organizations. A per-organization value would be a lie,
