@@ -43,7 +43,8 @@
   "files": [
     "dist",
     "migrations",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "publishConfig": {
     "access": "public"
@@ -52,5 +53,13 @@
     "react": {
       "optional": true
     }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/conreo/paperclip-plugin-webpush.git"
+  },
+  "homepage": "https://github.com/conreo/paperclip-plugin-webpush#readme",
+  "bugs": {
+    "url": "https://github.com/conreo/paperclip-plugin-webpush/issues"
   }
 }

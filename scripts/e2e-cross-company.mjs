@@ -34,7 +34,7 @@ if (!OTHER_COMPANY_ID) throw new Error("set SPIKE_OTHER_COMPANY_ID to a second c
 const cli = (...args) =>
   execFileSync("paperclipai", [...args, "--api-base", BASE], {
     encoding: "utf8",
-    env: { ...process.env, npm_config_cache: ".cache/npm" },
+    env: { ...process.env, npm_config_cache: process.env.npm_config_cache ?? ".cache/npm" },
   });
 
 const { context, page } = await launchProfile("chrome-profile-cross");

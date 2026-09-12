@@ -23,7 +23,13 @@ import {
   pluginSettingsUrl,
 } from "./lib/browser.mjs";
 
-const COMPANY_ID = process.env.SPIKE_COMPANY_ID ?? "acme-company-id";
+// Which company these checks act in. Required rather than defaulted: a company id
+// belongs to one instance, and a check that silently acts on the wrong one is worse
+// than one that refuses to start.
+const COMPANY_ID = process.env.SPIKE_COMPANY_ID;
+if (!COMPANY_ID) {
+  throw new Error("Set SPIKE_COMPANY_ID to the company these checks should act in.");
+}
 const UNASSIGNED_TESTID = "notify-unassigned";
 const DECISION_TRIGGER = "decision.created";
 

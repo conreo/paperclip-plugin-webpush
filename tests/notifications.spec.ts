@@ -546,17 +546,17 @@ describe("how a trigger is labelled", () => {
 
 describe("acronymOf", () => {
   it("takes the initials of a multi-word name", () => {
-    expect(acronymOf("Acme Trading Company")).toBe("STC");
-    expect(acronymOf("acme ops")).toBe("DT");
+    expect(acronymOf("Acme Trading Company")).toBe("ATC");
+    expect(acronymOf("acme ops")).toBe("AO");
   });
 
   it("takes the first letters of a single word", () => {
-    expect(acronymOf("Northwind")).toBe("DEL");
-    expect(acronymOf("Acme")).toBe("SPO");
+    expect(acronymOf("Northwind")).toBe("NOR");
+    expect(acronymOf("Acme")).toBe("ACM");
   });
 
   it("strips punctuation and collapses separators", () => {
-    expect(acronymOf("northwind-ops")).toBe("DO");
+    expect(acronymOf("northwind-ops")).toBe("NO");
     expect(acronymOf("  Acme, Inc.  ")).toBe("AI");
   });
 

@@ -20,12 +20,18 @@ import {
 
 const BASE = process.env.SPIKE_BASE_URL ?? "http://127.0.0.1:3100";
 const PREFIX = process.env.SPIKE_COMPANY_PREFIX ?? "ACME";
-const COMPANY_ID = process.env.SPIKE_COMPANY_ID ?? "acme-company-id";
+// Which company these checks act in. Required rather than defaulted: a company id
+// belongs to one instance, and a check that silently acts on the wrong one is worse
+// than one that refuses to start.
+const COMPANY_ID = process.env.SPIKE_COMPANY_ID;
+if (!COMPANY_ID) {
+  throw new Error("Set SPIKE_COMPANY_ID to the company these checks should act in.");
+}
 
 const cli = (...args) =>
   execFileSync("paperclipai", [...args, "--api-base", BASE], {
     encoding: "utf8",
-    env: { ...process.env, npm_config_cache: ".cache/npm" },
+    env: { ...process.env, npm_config_cache: process.env.npm_config_cache ?? ".cache/npm" },
   });
 
 const { context, page } = await launchProfile("chrome-profile-event");
