@@ -153,9 +153,15 @@ export const PLUGIN_STYLES = `
 .pcp-trigger { display: grid; border-top: 1px solid var(--border); }
 .pcp-trigger:first-of-type { border-top: 0; }
 
+/*
+ * Three columns: the trigger's noun, what the notification will say, and its state.
+ * The noun column is fixed so the summaries line up down the list; it ellipsises
+ * rather than wrapping, because a wrapped name would break that alignment.
+ */
 .pcp-trigger-row {
-  display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 0.75rem;
-  width: 100%; padding: 0.625rem 0.5rem;
+  display: grid; grid-template-columns: minmax(5rem, 8.5rem) minmax(0, 1fr) auto auto;
+  align-items: center; gap: 0.625rem;
+  width: 100%; padding: 0.5rem 0.5rem;
   border: 0; border-radius: var(--radius-md);
   background: transparent; color: inherit;
   font-family: inherit; text-align: left; cursor: pointer;
@@ -166,18 +172,39 @@ export const PLUGIN_STYLES = `
   outline: none;
   box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 50%, transparent);
 }
-.pcp-trigger-labels { display: grid; gap: 0.0625rem; min-width: 0; }
 .pcp-trigger-name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-size: 0.8125rem; line-height: 1.125rem; font-weight: 500; color: var(--foreground);
 }
 .pcp-trigger-summary {
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  display: flex; align-items: center; gap: 0.375rem;
+  min-width: 0;
   font-size: 0.75rem; line-height: 1rem; color: var(--muted-foreground);
 }
-.pcp-badge {
-  padding: 0 0.375rem; border-radius: 9999px; white-space: nowrap;
-  background: color-mix(in oklab, var(--primary) 12%, transparent); color: var(--foreground);
+.pcp-trigger-summary > span:last-child {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/*
+ * The organization's acronym, the same token its task ids carry. Deliberately
+ * neutral rather than tinted like an object chip: in a row it labels the list, it
+ * is not something you can insert.
+ */
+.pcp-acronym {
+  flex: 0 0 auto;
+  padding: 0 0.25rem;
+  border-radius: 0.25rem;
+  background: color-mix(in oklab, var(--muted-foreground) 14%, transparent);
+  color: var(--foreground);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.6875rem; line-height: 1rem;
+  letter-spacing: 0.02em;
+}
+/* A dot, not the word: the state is a detail, and the word cost the row its fit. */
+.pcp-dot {
+  flex: 0 0 auto;
+  width: 0.375rem; height: 0.375rem;
+  border-radius: 9999px;
+  background: var(--primary);
 }
 .pcp-chevron {
   width: 1rem; height: 1rem; color: var(--muted-foreground);

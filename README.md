@@ -224,19 +224,31 @@ plugin-owned state, could be written by any board member through a plugin action
 The settings page reads them back through the worker, so a saved change is visible
 immediately and applies to browsers enabled from then on.
 
-**Notification wording** is editable in the same section. Each trigger is a row showing
-its name and a one-line summary of what it sends; opening a row reveals its title and body,
-each composed of text and **objects**, and a preview of the message. An empty field keeps
-the built-in wording, which the field shows as its placeholder.
+**Notification wording** is editable in the same section. Each trigger is a row — its noun,
+the organization's acronym, and the body of the message — and opening a row reveals its
+title and body, each composed of text and **objects**, plus a preview of the message. An
+empty field keeps the built-in wording, which the field shows as its placeholder.
 
-The row list is deliberate: laid out flat, seven triggers with their fields is about
-1,600px of scrolling in which the trigger's name, the field labels and the notification's
-own text are all 12px — nothing shows where one trigger ends and the next begins. The rows
-put the same section in ~700px, and the controls appear only where they are wanted.
+The rows are shaped around what a notification does not need to repeat:
 
-The preview is drawn as the thing it becomes — an app icon, `Paperclip`, the title at 14px
-semibold, the body under it — rather than as two lines of muted text under a heading, which
-reads as help text and leaves you guessing which line is the title.
+- **The trigger is a noun.** `Approval`, `Task assigned`, `Run failed`, `Budget`,
+  `New task`, `Decision`, `Decision overdue`. Sentence labels ("An approval is waiting for
+  a decision") were the first of three statements of the same fact, since the notification
+  below them said it again. The sentence is kept as the row's tooltip.
+- **The row shows the body, not the title.** The title restates the trigger (`Approval
+  needed` under `Approval`); the body is the part that differs. The title takes over only
+  when there is no body to show.
+- **The organization is an acronym.** Rows carry `SAK`, not the company name, and so do
+  the notifications themselves: `SAK · Approval needed`. It is the company's issue prefix —
+  the token its task ids are built from — so it is shorter on a lock screen *and* familiar.
+  A company without one falls back to its name, then to initials derived from the name.
+  The same token is what `{{org}}` places in a message.
+- **Customised is a dot**, not a word, which is what let the row fit on one line.
+
+A row is 34px, so all seven fit in ~240px. The preview is drawn as the thing it becomes —
+app icon, `Paperclip`, the title at 14px semibold, the body under it — rather than two lines
+of muted text under a heading, which reads as help text and leaves you guessing which line
+is the title.
 
 An object is the value from the event — the organization, the agent, the task
 identifier, the task title, the approval type, the budget scope, the failed run. You do

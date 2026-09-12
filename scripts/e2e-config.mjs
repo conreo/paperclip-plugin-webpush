@@ -25,6 +25,7 @@ import {
 
 const COMPANY_ID = process.env.SPIKE_COMPANY_ID ?? "acme-company-id";
 const UNASSIGNED_TESTID = "notify-unassigned";
+const DECISION_TRIGGER = "decision.created";
 
 /**
  * Read the "Organization defaults" section: its trigger rows and, separately,
@@ -32,10 +33,13 @@ const UNASSIGNED_TESTID = "notify-unassigned";
  */
 const readOrgDefaults = (page) =>
   page.evaluate((unassignedTestId) => {
+    // Keyed by event type, not by label: the labels are nouns now, and "Decision"
+    // is a prefix of "Decision overdue", so substring matching would be ambiguous.
     const readRows = (root) =>
       [...root.querySelectorAll(".pcp-toggle-row")].map((row) => {
         const toggle = row.querySelector('[role="switch"]');
         return {
+          type: toggle?.getAttribute("data-testid")?.replace("default-trigger-", "") ?? null,
           label: row.querySelector(".pcp-toggle-label")?.textContent?.trim() ?? "",
           checked: toggle?.getAttribute("aria-checked") === "true",
         };
@@ -45,10 +49,8 @@ const readOrgDefaults = (page) =>
     if (!section) return null;
     const rows = readRows(section);
     const unassignedToggle = section.querySelector(`[data-testid="${unassignedTestId}"]`);
-    const unassignedLabel =
-      unassignedToggle?.closest(".pcp-toggle-row")?.querySelector(".pcp-toggle-label")?.textContent?.trim() ?? "";
     return {
-      triggers: rows.filter((row) => row.label !== unassignedLabel),
+      triggers: rows.filter((row) => row.type !== null),
       notifyUnassigned: unassignedToggle ? unassignedToggle.getAttribute("aria-checked") === "true" : null,
     };
   }, UNASSIGNED_TESTID);
@@ -63,11 +65,13 @@ const readDeviceTriggers = async (page) => {
   return page.evaluate(() =>
     [...document.querySelectorAll('[data-testid="device-row"][data-device-current="true"] .pcp-toggle-row')]
       .map((row) => ({
+        type:
+          row.querySelector('[role="switch"]')?.getAttribute("data-testid")?.replace("device-trigger-", "") ?? null,
         label: row.querySelector(".pcp-toggle-label")?.textContent?.trim() ?? "",
         checked: row.querySelector('[role="switch"]')?.getAttribute("aria-checked") === "true",
       }))
       // The card's own header row carries no switch.
-      .filter((row) => row.label !== ""),
+      .filter((row) => row.type !== null),
   );
 };
 
@@ -83,18 +87,14 @@ const setSwitch = async (page, selector, wanted) => {
   );
 };
 
-const clickTrigger = async (page, wantedLabel, wanted) => {
+const clickTrigger = async (page, eventType, wanted) => {
   await page.evaluate(
-    ({ wantedLabel, wanted }) => {
-      const section = document.querySelector('[data-testid="org-defaults"]');
-      const row = [...(section?.querySelectorAll(".pcp-toggle-row") ?? [])].find((candidate) =>
-        (candidate.querySelector(".pcp-toggle-label")?.textContent ?? "").includes(wantedLabel),
-      );
-      const toggle = row?.querySelector('[role="switch"]');
+    ({ eventType, wanted }) => {
+      const toggle = document.querySelector(`[data-testid="default-trigger-${eventType}"]`);
       if (!toggle) return;
       if ((toggle.getAttribute("aria-checked") === "true") !== wanted) toggle.click();
     },
-    { wantedLabel, wanted },
+    { eventType, wanted },
   );
 };
 
@@ -129,10 +129,8 @@ if (!original) throw new Error("could not find the Organization defaults section
 console.log("saved configuration:", JSON.stringify(original));
 
 // --- 2. Change it and save --------------------------------------------------
-const DECISION = "decisions desk needs a choice";
-
 for (const trigger of original.triggers) {
-  await clickTrigger(pageA, trigger.label, trigger.label.includes(DECISION));
+  await clickTrigger(pageA, trigger.type, trigger.type === DECISION_TRIGGER);
 }
 await setSwitch(pageA, `[data-testid="${UNASSIGNED_TESTID}"]`, false);
 
@@ -154,7 +152,7 @@ console.log("after reload:", JSON.stringify(afterReload));
 const persisted =
   afterReload?.notifyUnassigned === false &&
   afterReload.triggers.filter((t) => t.checked).length === 1 &&
-  afterReload.triggers.some((t) => t.checked && t.label.includes(DECISION));
+  afterReload.triggers.some((t) => t.checked && t.type === DECISION_TRIGGER);
 console.log(persisted ? "PASS: the saved configuration survived a reload" : "FAIL: configuration did not persist");
 
 // --- 4. A browser enabled now must start with the configured set ------------
@@ -166,14 +164,14 @@ const newDevice = await readDeviceTriggers(pageB);
 const checked = (newDevice ?? []).filter((entry) => entry.checked);
 console.log("new device triggers:", JSON.stringify(checked));
 console.log(
-  checked.length === 1 && checked[0]?.label.includes(DECISION)
+  checked.length === 1 && checked[0]?.type === DECISION_TRIGGER
     ? "PASS: a newly enabled browser used the configured defaults"
     : "FAIL: a newly enabled browser did not use the configured defaults",
 );
 
 // --- 5. Restore -------------------------------------------------------------
 for (const trigger of original.triggers) {
-  await clickTrigger(pageA, trigger.label, trigger.checked);
+  await clickTrigger(pageA, trigger.type, trigger.checked);
 }
 await setSwitch(pageA, `[data-testid="${UNASSIGNED_TESTID}"]`, original.notifyUnassigned !== false);
 await pageA.getByTestId("save-org-defaults").click();

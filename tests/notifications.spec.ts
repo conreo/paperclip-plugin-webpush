@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { PluginEvent } from "@paperclipai/plugin-sdk";
 import {
   DEFAULT_EVENT_TYPES,
+  EVENT_TYPE_DESCRIPTIONS,
+  EVENT_TYPE_LABELS,
   TEMPLATE_OBJECTS,
   TEMPLATE_OBJECT_HINTS,
+  acronymOf,
   activeUserMemberIds,
   NOTIFIABLE_EVENT_TYPES,
   buildNotification,
@@ -518,6 +521,50 @@ describe("where event fields are read from", () => {
     const bare = buildNotification(event({ eventType: "issue.created", payload: {} }), "ACME");
     expect(bare?.title).toBe("New task");
     expect(bare?.body).toBe("A task was created.");
+  });
+});
+
+describe("how a trigger is labelled", () => {
+  it("labels every trigger with a noun, not a sentence", () => {
+    // The labels are a list you scan. A sentence per row repeated the
+    // notification's own wording back at it, which is what made the section read
+    // as the same fact three times.
+    for (const type of NOTIFIABLE_EVENT_TYPES) {
+      const label = EVENT_TYPE_LABELS[type];
+      expect(label.length).toBeLessThanOrEqual(16);
+      expect(label.endsWith(".")).toBe(false);
+      expect(label.split(" ").length).toBeLessThanOrEqual(2);
+    }
+  });
+
+  it("keeps the explanation of each trigger available", () => {
+    for (const type of NOTIFIABLE_EVENT_TYPES) {
+      expect(EVENT_TYPE_DESCRIPTIONS[type]?.length ?? 0).toBeGreaterThan(10);
+    }
+  });
+});
+
+describe("acronymOf", () => {
+  it("takes the initials of a multi-word name", () => {
+    expect(acronymOf("Acme Trading Company")).toBe("STC");
+    expect(acronymOf("acme ops")).toBe("DT");
+  });
+
+  it("takes the first letters of a single word", () => {
+    expect(acronymOf("Northwind")).toBe("DEL");
+    expect(acronymOf("Acme")).toBe("SPO");
+  });
+
+  it("strips punctuation and collapses separators", () => {
+    expect(acronymOf("northwind-ops")).toBe("DO");
+    expect(acronymOf("  Acme, Inc.  ")).toBe("AI");
+  });
+
+  it("answers nothing for a company with no name, rather than an empty badge", () => {
+    expect(acronymOf(null)).toBeNull();
+    expect(acronymOf(undefined)).toBeNull();
+    expect(acronymOf("   ")).toBeNull();
+    expect(acronymOf("...")).toBeNull();
   });
 });
 

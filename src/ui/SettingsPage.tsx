@@ -5,6 +5,7 @@ import {
   type PluginSettingsPageProps,
 } from "@paperclipai/plugin-sdk/ui";
 import {
+  EVENT_TYPE_DESCRIPTIONS,
   SAMPLE_AGENT_NAME,
   hasUnknownPlaceholder,
   previewDefaults,
@@ -22,8 +23,10 @@ type ClientConfig = {
   vapidPublicKey: string;
   eventTypes: EventTypeOption[];
   notifyUnassignedEvents: boolean;
-  /** The organization's own name: what the built-in wording prefixes, and the preview's sample. */
+  /** The organization's own name, used when it has no acronym of its own. */
   organizationName: string | null;
+  /** The organization's short token: what notifications are prefixed with. */
+  organizationAcronym: string | null;
   templates: Record<string, NotificationTemplate>;
   throttle: { max: number; windowMinutes: number };
 };
@@ -471,7 +474,10 @@ export function SettingsPage(props: PluginSettingsPageProps) {
   );
 
   const thisBrowserRegistered = devices.some((device) => device.endpoint === currentEndpoint);
-  const organizationName = config?.organizationName || "Your organization";
+  // The token that names the organization in a notification: its issue prefix where
+  // it has one, which is the same token its task ids use.
+  const acronym = config?.organizationAcronym ?? null;
+  const organizationToken = acronym ?? config?.organizationName ?? "Your organization";
   const eventTypes = config?.eventTypes ?? [];
 
   const toggleDefaultTrigger = (eventType: string) => {
@@ -494,19 +500,19 @@ export function SettingsPage(props: PluginSettingsPageProps) {
   const preview = useMemo(() => {
     return (eventType: string) => {
       const defaults = previewDefaults(eventType as NotifiableEventType, { agentName: SAMPLE_AGENT_NAME });
-      const vars = sampleTemplateVars(eventType as NotifiableEventType, organizationName);
+      const vars = sampleTemplateVars(eventType as NotifiableEventType, organizationToken);
       const template = templates?.[eventType];
       const customTitle = template?.title?.trim();
       const customBody = template?.body?.trim();
       return {
         title: customTitle
           ? renderTemplate(customTitle, vars)
-          : `${organizationName} · ${defaults.title}`,
+          : `${organizationToken} · ${defaults.title}`,
         body: customBody ? renderTemplate(customBody, vars) : defaults.body,
         customised: Boolean(customTitle || customBody),
       };
     };
-  }, [organizationName, templates]);
+  }, [organizationToken, templates]);
 
   const setTemplateField = (eventType: string, field: "title" | "body", value: string) => {
     setTemplates((current) => ({
@@ -678,14 +684,21 @@ export function SettingsPage(props: PluginSettingsPageProps) {
                 aria-controls={`trigger-body-${option.type}`}
                 onClick={() => setOpenTrigger(open ? null : option.type)}
                 data-testid={`open-${option.type}`}
+                title={EVENT_TYPE_DESCRIPTIONS[option.type as NotifiableEventType]}
               >
-                <span className="pcp-trigger-labels">
-                  <span className="pcp-trigger-name">{option.label}</span>
-                  <span className="pcp-trigger-summary" data-testid={`summary-${option.type}`}>
-                    {shown.body ? `${shown.title} — ${shown.body}` : shown.title}
-                  </span>
+                <span className="pcp-trigger-name">{option.label}</span>
+                {/*
+                  The body, not the title: the title restates the trigger ("Approval
+                  needed" under "Approval") and the body carries the part that
+                  differs. The title takes over only when there is no body to show.
+                */}
+                <span className="pcp-trigger-summary" data-testid={`summary-${option.type}`}>
+                  {acronym ? <span className="pcp-acronym">{acronym}</span> : null}
+                  <span>{shown.body || shown.title}</span>
                 </span>
-                {shown.customised ? <span className="pcp-badge">Customised</span> : null}
+                {shown.customised ? (
+                  <span className="pcp-dot" title="Customised" aria-label="Customised" role="img" />
+                ) : null}
                 <svg
                   className="pcp-chevron"
                   data-open={open ? "true" : "false"}

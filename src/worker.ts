@@ -1,6 +1,7 @@
 import { definePlugin, runWorker } from "@paperclipai/plugin-sdk";
 import type { PluginContext, PluginEvent } from "@paperclipai/plugin-sdk";
 import {
+  acronymOf,
   DEFAULT_EVENT_TYPES,
   EVENT_TYPE_LABELS,
   activeUserMemberIds,
@@ -121,14 +122,27 @@ async function readConfig(ctx: PluginContext, companyId: string | null): Promise
   }
 }
 
+/**
+ * The token that names an organization inside a notification.
+ *
+ * Its issue prefix, not its full name: `SAK · Approval needed` fits a lock screen
+ * where `Northwind · Approval needed` does not, and it is the same token the
+ * organization's own task ids are built from. A company without a prefix falls
+ * back to its name, and then to a derived acronym.
+ */
+function organizationToken(info: { prefix: string | null; name: string | null }): string | null {
+  return info.prefix ?? acronymOf(info.name);
+}
+
 /** Everything the fan-out needs about one company, from a single config read. */
 async function companySettings(ctx: PluginContext, companyId: string | null) {
   const [raw, info] = await Promise.all([readConfig(ctx, companyId), companyId ? companyInfo(ctx, companyId) : null]);
   const resolved = info ?? { prefix: null, name: null };
   return {
     config: resolvePluginConfig(raw),
-    presentation: resolvePresentation(raw, resolved.name),
+    presentation: resolvePresentation(raw, organizationToken(resolved)),
     prefix: resolved.prefix,
+    organization: resolved,
   };
 }
 
@@ -378,9 +392,10 @@ const plugin = definePlugin({
         })),
         notifyUnassignedEvents: config.notifyUnassignedEvents,
         // Notification wording, so the settings page can show and edit what is saved.
-        // The organization's own name is what the built-in wording prefixes, and
-        // what the editor shows in its preview.
-        organizationName: settings.presentation.organizationLabel,
+        // The token that names the organization in a notification is what the
+        // built-in wording prefixes and what the editor's preview shows.
+        organizationName: settings.organization.name,
+        organizationAcronym: settings.presentation.organizationLabel,
         templates: settings.presentation.templates,
         throttle: THROTTLE,
       };

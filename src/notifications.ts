@@ -67,13 +67,31 @@ export function isNotifiableEventType(value: string): value is NotifiableEventTy
 
 /** Short human label per event type, used by the settings UI. */
 export const EVENT_TYPE_LABELS: Record<NotifiableEventType, string> = {
-  "decision.created": "The decisions desk needs a choice from you",
-  "decision.expired": "A decision passed its decide-by date",
-  "approval.created": "An approval is waiting for a decision",
-  "issue.assignment_wakeup_requested": "A task was handed to someone",
-  "agent.run.failed": "An agent run failed",
-  "budget.incident.opened": "A budget threshold was crossed",
-  "issue.created": "A new task was created",
+  "decision.created": "Decision",
+  "decision.expired": "Decision overdue",
+  "approval.created": "Approval",
+  "issue.assignment_wakeup_requested": "Task assigned",
+  "agent.run.failed": "Run failed",
+  "budget.incident.opened": "Budget",
+  "issue.created": "New task",
+};
+
+/**
+ * What each trigger is about, in a sentence.
+ *
+ * The labels above are nouns because they are used as a list you scan — a list of
+ * sentences repeated the notification's own wording back at it ("An approval is
+ * waiting for a decision" above "Approval needed"). These keep the explanation
+ * available, as the list's tooltips and in the editor.
+ */
+export const EVENT_TYPE_DESCRIPTIONS: Record<NotifiableEventType, string> = {
+  "decision.created": "Someone has to make a decision at the decisions desk.",
+  "decision.expired": "A decision passed its decide-by date without an answer.",
+  "approval.created": "An approval is waiting for a decision.",
+  "issue.assignment_wakeup_requested": "A task was handed to someone.",
+  "agent.run.failed": "An agent run failed.",
+  "budget.incident.opened": "A budget threshold was crossed.",
+  "issue.created": "A new task was created.",
 };
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -164,7 +182,7 @@ export type TemplateObject = (typeof TEMPLATE_OBJECTS)[number];
 
 /** What each object puts into a message. Shown in the editor's insert list. */
 export const TEMPLATE_OBJECT_HINTS: Record<TemplateObject, string> = {
-  org: "The organization's name.",
+  org: "The organization: its short name, or the full name when it has none.",
   agent: "The agent the event is about, when it is about one.",
   identifier: "The task's short identifier, such as ACME-42.",
   title: "The task's title.",
@@ -255,6 +273,32 @@ export function hasUnknownPlaceholder(template: string): boolean {
   return parseTemplate(template).some(
     (segment) => segment.kind === "text" && /\{\{\s*[a-zA-Z0-9_]+\s*\}\}/.test(segment.value),
   );
+}
+
+/**
+ * A short stand-in for an organization's name.
+ *
+ * Companies normally carry an issue prefix of their own (the `SAK` in `SAK-42`),
+ * and that is used when it exists because it is the token its members already
+ * read. This is the fallback for one that does not: initials for a multi-word
+ * name, otherwise the first letters of the single word. `null` in, `null` out, so
+ * an instance with no company name shows no badge rather than an empty one.
+ */
+export function acronymOf(name: string | null | undefined): string | null {
+  const trimmed = name?.trim();
+  if (!trimmed) return null;
+
+  const words = trimmed.split(/[\s_-]+/).filter(Boolean);
+  if (words.length > 1) {
+    return words
+      .slice(0, 3)
+      .map((word) => word[0])
+      .join("")
+      .toUpperCase();
+  }
+
+  const letters = trimmed.replace(/[^\p{L}\p{N}]/gu, "");
+  return letters ? letters.slice(0, 3).toUpperCase() : null;
 }
 
 /** The agent name the settings page uses to demonstrate objects. */
