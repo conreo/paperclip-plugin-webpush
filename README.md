@@ -182,6 +182,32 @@ how a notification channel gets muted.
 Preferences are per **device**, not per organization: one toggle set and one
 throttle, shared across the organizations you belong to.
 
+### Fullscreen button
+
+The plugin adds a **fullscreen toggle to the toolbar** (next to the breadcrumbs) that
+requests an immersive window: no address bar, and on Android no status or navigation
+bars until you swipe from an edge.
+
+This exists because a privately hosted Paperclip often *cannot* be installed as an
+app. Android Chrome builds installed PWAs (WebAPKs) with Google's server-side minting
+service, which has to fetch the manifest and icons over the public internet — a
+tailnet-only or otherwise private origin is unreachable to it, so Chrome silently
+falls back to a plain shortcut, and a shortcut always opens with browser chrome no
+matter what the manifest requests. On such a deployment the toggle is the way to get
+the space back.
+
+Limits, so they are not surprises:
+
+- It is the browser's Fullscreen API, not an installed-app display mode. The bars
+  return when the page reloads or you swipe from an edge.
+- `matchMedia("(display-mode: fullscreen)")` stays **false** — that query describes
+  installed apps, and this is a different mechanism.
+- The button hides itself where the API is unavailable, rather than offering a button
+  that cannot work.
+
+If your instance *is* reachable publicly, the manifest change is the better route: it
+gives a genuinely installed, always-fullscreen app **and** push notifications.
+
 ### Configuration
 
 Two settings are configurable, per organization, on the plugin's settings page:
@@ -272,6 +298,7 @@ enabled notifications, and `delivered` rows whenever something was pushed.
 | iOS: Safari 16.4+ **and** Add to Home Screen | iOS delivers Web Push only to a Home Screen web app whose manifest requests a standalone window. Paperclip ships `display: "browser"`, so **iOS is out of scope**. |
 | Host: npm + registry access | Only for npm-package installs. Local-path installs instead need `node_modules` shipped. |
 | Plugin capability `access.members.read` | Used to resolve who belongs to an organization, for events that name nobody responsible. |
+| Plugin capability `ui.action.register` | Renders the fullscreen toolbar button. |
 
 ---
 

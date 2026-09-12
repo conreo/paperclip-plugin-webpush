@@ -10,7 +10,7 @@ import { DEFAULT_EVENT_TYPES, NOTIFIABLE_EVENT_TYPES } from "./notifications.js"
 const manifest: PaperclipPluginManifestV1 = {
   id: "conreo.webpush",
   apiVersion: 1,
-  version: "0.6.0",
+  version: "0.7.0",
   displayName: "Web Push Notifications",
   description: "Desktop and Android push notifications for Paperclip board events.",
   author: "conreo",
@@ -28,6 +28,8 @@ const manifest: PaperclipPluginManifestV1 = {
     // from it.
     "access.members.read",
     "instance.settings.register",
+    // Renders the fullscreen toolbar button.
+    "ui.action.register",
     "plugin.state.read",
     "plugin.state.write",
     "secrets.read-ref",
@@ -91,6 +93,15 @@ const manifest: PaperclipPluginManifestV1 = {
         id: "notifications",
         displayName: "Notifications",
         exportName: "SettingsPage",
+      },
+      {
+        // Immersive fullscreen for deployments that cannot be installed as an
+        // app (a tailnet-only or other private origin cannot mint a WebAPK), so
+        // the address bar is still removable on demand.
+        type: "globalToolbarButton",
+        id: "fullscreen",
+        displayName: "Fullscreen",
+        exportName: "FullscreenButton",
       },
     ],
   },
