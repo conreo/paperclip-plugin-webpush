@@ -202,9 +202,16 @@ persistent Chrome profile because Chrome disables the Push API in incognito
 contexts):
 
 ```bash
-node scripts/e2e-local.mjs   # permission -> subscribe -> real test push -> notification shown
-node scripts/e2e-event.mjs   # creates a real issue, expects a notification, deletes the issue
+node scripts/e2e-local.mjs      # permission -> subscribe -> real test push -> notification shown
+node scripts/e2e-event.mjs      # creates a real issue, expects a notification, deletes the issue
+node scripts/e2e-approval.mjs   # creates an approval, expects "Approval needed", then rejects it
 ```
+
+All three wait for the worker to report the device as registered before triggering
+anything. That matters: the browser can hold a `PushSubscription` while the
+`register-subscription` action is still in flight, and an event that arrives in
+that window legitimately has zero recipients and is skipped without a delivery
+row — which looks exactly like a delivery bug.
 
 ## Licence
 

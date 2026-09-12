@@ -11,6 +11,18 @@
  */
 import { chromium } from "playwright";
 
+
+// The browser can hold a PushSubscription long before the worker has the row:
+// the device list is what proves the register action committed, and without a
+// committed row an event legitimately has zero recipients and is skipped.
+const waitForRegisteredDevice = async (page, timeout = 45000) => {
+  await page.waitForFunction(
+    () => /Registered devices \([1-9]/.test(document.body.innerText),
+    null,
+    { timeout },
+  );
+};
+
 const BASE = process.env.SPIKE_BASE_URL ?? "http://127.0.0.1:3100";
 const PREFIX = process.env.SPIKE_COMPANY_PREFIX ?? "ACME";
 const PLUGIN_ID = process.env.SPIKE_PLUGIN_ID ?? "0fe68a3c-40db-4524-b94f-69ca8fc50231";
@@ -51,12 +63,7 @@ const readPanel = async () => {
 
 // --- Step 1: enable notifications on this browser -------------------------
 await page.getByRole("button", { name: /Enable notifications|Re-register this browser/ }).click();
-await page.waitForFunction(
-  () => !document.querySelector("button[disabled]") || true,
-  null,
-  { timeout: 1000 },
-).catch(() => {});
-await page.waitForTimeout(8000);
+await waitForRegisteredDevice(page);
 
 const afterEnable = await readPanel();
 console.log("=== panel after enable ===");
@@ -84,18 +91,24 @@ if (!subscription.endpoint) {
 
 // --- Step 2: real delivery -------------------------------------------------
 await page.getByRole("button", { name: "Send test notification" }).click();
-await page.waitForTimeout(8000);
+// Poll rather than sleep: a shown notification can be dismissed by the OS before
+// a fixed wait elapses, which reads as "not delivered" even though it was.
+let shown = [];
+const deadline = Date.now() + 25000;
+while (Date.now() < deadline && shown.length === 0) {
+  shown = await page.evaluate(async () => {
+    const registrations = await navigator.serviceWorker.getRegistrations();
+    const pluginRegistration = registrations.find((item) => item.scope.includes("/_plugins/"));
+    const notifications = (await pluginRegistration?.getNotifications()) ?? [];
+    return notifications.map((item) => ({ title: item.title, body: item.body, tag: item.tag }));
+  });
+  if (shown.length === 0) await page.waitForTimeout(500);
+}
 
 const afterTest = await readPanel();
 console.log("=== panel after test send ===");
 console.log(afterTest);
 
-const shown = await page.evaluate(async () => {
-  const registrations = await navigator.serviceWorker.getRegistrations();
-  const pluginRegistration = registrations.find((item) => item.scope.includes("/_plugins/"));
-  const notifications = (await pluginRegistration?.getNotifications()) ?? [];
-  return notifications.map((item) => ({ title: item.title, body: item.body, tag: item.tag }));
-});
 console.log("notifications currently shown by our worker →", JSON.stringify(shown, null, 2));
 
 const devicePanel = await page
