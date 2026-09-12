@@ -9,7 +9,7 @@ import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
 const manifest: PaperclipPluginManifestV1 = {
   id: "conreo.webpush",
   apiVersion: 1,
-  version: "0.4.0",
+  version: "0.4.1",
   displayName: "Web Push Notifications",
   description: "Desktop and Android push notifications for Paperclip board events.",
   author: "conreo",

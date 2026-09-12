@@ -59,14 +59,19 @@ tables:
 
 ## Behaviour
 
-**Triggers** (each can be toggled per device):
+**Triggers** (each can be toggled per device). The defaults are attention-shaped:
+a push should mean a human is needed. `approval.created` is both a decision and an
+inbox item, an assignment wakeup is addressed to a person, and a budget incident
+needs an operator to act. Agent-activity and new-task notifications are opt-in,
+because pushing them by default is how a notification channel gets muted.
 
 | Event | Notification |
 | --- | --- |
 | `approval.created` | "Approval needed" → `/<prefix>/approvals/<id>` |
 | `issue.assignment_wakeup_requested` | "Task assigned" → `/<prefix>/issues/<id>` |
-| `agent.run.failed` | "Agent run failed" → `/<prefix>/issues/<id>` |
+| `agent.run.failed` (off by default) | "Agent run failed" → `/<prefix>/issues/<id>` |
 | `budget.incident.opened` | "Budget threshold crossed" → `/<prefix>/activity/budgets` |
+| `agent.run.failed` (off by default) | "Agent run failed" → `/<prefix>/issues/<id>` |
 | `issue.created` (off by default) | "New task" → `/<prefix>/issues/<id>` |
 
 **Targeting.** The activity log stamps events with `payload.responsibleUserId`.
@@ -182,6 +187,19 @@ attempts with HTTP status, and per-device test and remove buttons.
 
 ## Limitations
 
+- **The Decisions Desk cannot be pushed**, and it is the most obvious thing an
+  operator would want. `decision.created` (and `decision.expired` / `dismissed`)
+  are logged as activity actions with exactly the right payload —
+  `{ originIssueId, originAgentId, originResponsibleUserId }`, plus a `decide_by`
+  deadline on `decision_triage` — but they are absent from `PLUGIN_EVENT_TYPES` and
+  from the host's activity-action→event map, so `eventTypeForActivityAction()`
+  returns null and the plugin bus never forwards them. A plugin worker has no
+  authenticated route to `GET /api/companies/:id/decisions` either. Covering
+  decisions needs a small upstream change (add `decision.created` to the event
+  constants and the mapping) or a host API for decisions.
+- **The inbox is a derived view, not an event.** There is no "inbox item created"
+  event; approvals and assignment wakeups are the inbox-addressed signals the event
+  surface exposes, which is why they are the defaults.
 - **iOS needs a standalone manifest.** See the requirements table.
 - **VAPID keys are generated per instance and stored in the plugin namespace.**
   Rotating or deleting them invalidates every existing subscription; the

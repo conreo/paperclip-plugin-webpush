@@ -36,10 +36,17 @@ export const NOTIFIABLE_EVENT_TYPES = [
 
 export type NotifiableEventType = (typeof NOTIFIABLE_EVENT_TYPES)[number];
 
+/**
+ * Defaults are attention-shaped on purpose: a push should mean "a human is
+ * needed", which in Paperclip means a decision or an inbox-addressed item.
+ * `approval.created` is both (approvals are decisions and they land in the
+ * inbox), and an assignment wakeup is addressed to a person. Agent activity
+ * (`agent.run.failed`) and new tasks are deliberately opt-in: pushing them by
+ * default is how a notification channel gets muted.
+ */
 export const DEFAULT_EVENT_TYPES: NotifiableEventType[] = [
   "approval.created",
   "issue.assignment_wakeup_requested",
-  "agent.run.failed",
   "budget.incident.opened",
 ];
 

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { PluginEvent } from "@paperclipai/plugin-sdk";
 import {
+  DEFAULT_EVENT_TYPES,
+  NOTIFIABLE_EVENT_TYPES,
   buildNotification,
   resolveVapidSubject,
   planDelivery,
@@ -37,6 +39,24 @@ function subscription(overrides: Partial<SubscriptionTarget> = {}): Subscription
     ...overrides,
   };
 }
+
+describe("notification defaults", () => {
+  it("keeps agent activity out of the defaults", () => {
+    // A push should mean a human is needed. Agent activity stays available, but
+    // opting people into it by default is how a channel gets muted.
+    expect(DEFAULT_EVENT_TYPES).not.toContain("agent.run.failed");
+    expect(DEFAULT_EVENT_TYPES).not.toContain("issue.created");
+    expect(NOTIFIABLE_EVENT_TYPES).toContain("agent.run.failed");
+  });
+
+  it("defaults to the signals that mean a person must act", () => {
+    expect(DEFAULT_EVENT_TYPES).toEqual([
+      "approval.created",
+      "issue.assignment_wakeup_requested",
+      "budget.incident.opened",
+    ]);
+  });
+});
 
 describe("buildNotification", () => {
   it("deep-links approvals under the company route prefix", () => {
