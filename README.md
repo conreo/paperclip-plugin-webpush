@@ -121,6 +121,14 @@ paperclipai plugin install /paperclip/plugins/webpush \
 `/paperclip` is the instance's persistent volume, so the plugin survives
 container restarts (but not volume deletion).
 
+The path is resolved on the **server**, so the `paperclipai plugin install` step
+can run from any machine that can reach the instance — the path only has to exist
+inside the container. Authenticate the CLI against the instance once first:
+
+```bash
+paperclipai auth login --api-base https://paperclip.example.ts.net
+```
+
 **B. Bind mount + local path.** Add `- /opt/paperclip-plugins:/plugins:ro` to the
 server service in your compose override and recreate the container. Use this when
 you want to update the plugin by re-copying files rather than `docker cp`.
@@ -131,16 +139,17 @@ container has `npm` available, so this works without any mount.
 
 ### Register a browser
 
-Open the plugin's settings page. The URL is keyed by the plugin **record id**,
-not the plugin key — using the key renders the auto-generated configuration form
-instead of this plugin's UI:
+Open the plugin's settings page. Reach it from the **Instance Settings → Plugins**
+sidebar entry (the host builds that link itself), or by URL. The URL is keyed by
+the plugin **record id**, not the plugin key — typing the key into the URL renders
+the host's auto-generated configuration form instead of this plugin's UI:
 
 ```
 https://<instance>/<companyPrefix>/company/settings/instance/plugins/<pluginRecordId>
 ```
 
-`<companyPrefix>` is the company's issue prefix (e.g. `ACME`). The plugin id is
-shown by `paperclipai plugin inspect conreo.webpush`.
+`<companyPrefix>` is the company's issue prefix (e.g. `ACME`), and the record id is
+shown by `paperclipai plugin inspect conreo.webpush` as `id=…`.
 
 Click **Enable notifications**, allow the browser prompt, then **Send test
 notification**. If the test arrives but board events do not, check that the
