@@ -1,0 +1,377 @@
+import { definePlugin, runWorker } from "@paperclipai/plugin-sdk";
+import type { PluginContext, PluginEvent } from "@paperclipai/plugin-sdk";
+import {
+  DEFAULT_EVENT_TYPES,
+  EVENT_TYPE_LABELS,
+  NOTIFIABLE_EVENT_TYPES,
+  buildNotification,
+  isNotifiableEventType,
+  resolveVapidSubject,
+  selectRecipients,
+  shouldThrottle,
+  type NotificationPayload,
+  type SubscriptionTarget,
+} from "./notifications.js";
+import {
+  countRecentDeliveries,
+  deleteByEndpoint,
+  deleteSubscription,
+  ensureVapidKeypair,
+  listEnabledForCompany,
+  listForUser,
+  listRecentDeliveries,
+  markDelivered,
+  markFailed,
+  pruneDeliveries,
+  pruneNeverDelivered,
+  recordDelivery,
+  sendPush,
+  updateSubscriptionPreferences,
+  upsertSubscription,
+  type PluginDb,
+} from "./store.js";
+
+/** Flood control: at most this many pushes per device inside the window. */
+const THROTTLE = { max: 12, windowMinutes: 5 };
+
+/** How long the delivery ledger and never-delivered devices are kept. */
+const RETENTION = { deliveryDays: 30, staleFailureCount: 5, staleDays: 7 };
+
+/** Used when a subscription's origin is not an https origin (e.g. localhost dev). */
+const FALLBACK_VAPID_SUBJECT = "mailto:webpush@paperclip.local";
+
+/**
+ * Company route prefixes change almost never and are read on every event, so a
+ * process-local cache keeps the fan-out free of a host call per notification.
+ */
+const companyPrefixCache = new Map<string, string | null>();
+
+async function companyPrefix(ctx: PluginContext, companyId: string): Promise<string | null> {
+  if (companyPrefixCache.has(companyId)) return companyPrefixCache.get(companyId) ?? null;
+  try {
+    const company = await ctx.companies.get(companyId);
+    const prefix = company?.issuePrefix?.trim() || null;
+    companyPrefixCache.set(companyId, prefix);
+    return prefix;
+  } catch (error) {
+    ctx.logger.warn(`company prefix lookup failed for ${companyId}: ${String(error)}`);
+    return null;
+  }
+}
+
+type PushSubscriptionJson = {
+  endpoint?: unknown;
+  keys?: { p256dh?: unknown; auth?: unknown };
+};
+
+function parseSubscriptionInput(value: unknown): {
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+} | null {
+  if (typeof value !== "object" || value === null) return null;
+  const candidate = value as PushSubscriptionJson;
+  const { endpoint, keys } = candidate;
+  if (typeof endpoint !== "string" || endpoint.length === 0) return null;
+  if (!keys || typeof keys.p256dh !== "string" || typeof keys.auth !== "string") return null;
+  return { endpoint, p256dh: keys.p256dh, auth: keys.auth };
+}
+
+/** Accept only origins usable as a VAPID subject (https) or as a display value. */
+function normalizeOrigin(value: unknown): string | null {
+  if (typeof value !== "string" || value.length === 0) return null;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" && url.hostname !== "localhost" && url.hostname !== "127.0.0.1") {
+      return null;
+    }
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
+
+function sanitizeEventTypes(value: unknown): string[] {
+  if (!Array.isArray(value)) return [...DEFAULT_EVENT_TYPES];
+  const requested = value.filter(
+    (entry): entry is string => typeof entry === "string" && isNotifiableEventType(entry),
+  );
+  return requested;
+}
+
+function describeUserAgent(value: unknown): string | null {
+  if (typeof value !== "string" || value.trim().length === 0) return null;
+  return value.trim().slice(0, 250);
+}
+
+/**
+ * Turn one subscription into the settings page's device row: what it receives,
+ * whether it is healthy, and its last few delivery attempts.
+ */
+async function describeDevice(
+  db: PluginDb,
+  subscription: SubscriptionTarget,
+): Promise<Record<string, unknown>> {
+  const deliveries = await listRecentDeliveries(db, subscription.id, 5);
+  return {
+    endpoint: subscription.endpoint,
+    eventTypes: subscription.eventTypes,
+    enabled: subscription.enabled,
+    origin: subscription.origin,
+    deliveries,
+  };
+}
+
+/** Fan one event out to the devices that should hear about it. */
+async function fanOut(ctx: PluginContext, db: PluginDb, event: PluginEvent): Promise<void> {
+  const notification = buildNotification(event, await companyPrefix(ctx, event.companyId));
+  if (!notification) return;
+
+  const subscriptions = await listEnabledForCompany(db, event.companyId);
+  const recipients = selectRecipients(subscriptions, event);
+  if (recipients.length === 0) return;
+
+  const vapid = await ensureVapidKeypair(db);
+
+  for (const subscription of recipients) {
+    const recent = await countRecentDeliveries(db, subscription.id, THROTTLE.windowMinutes);
+    if (shouldThrottle(recent, { max: THROTTLE.max })) {
+      await recordDelivery(db, {
+        subscriptionId: subscription.id,
+        eventId: notification.eventId,
+        eventType: notification.eventType,
+        status: "throttled",
+        error: `over ${THROTTLE.max} pushes in ${THROTTLE.windowMinutes} minutes`,
+      });
+      continue;
+    }
+
+    const result = await sendPush({
+      subscription,
+      payload: notification satisfies NotificationPayload,
+      vapid,
+      subject: resolveVapidSubject(subscription.origin, FALLBACK_VAPID_SUBJECT),
+    });
+
+    if (result.ok) {
+      await markDelivered(db, subscription.id);
+      await recordDelivery(db, {
+        subscriptionId: subscription.id,
+        eventId: notification.eventId,
+        eventType: notification.eventType,
+        status: "delivered",
+      });
+      continue;
+    }
+
+    // 404/410 means the push service has forgotten this endpoint for good:
+    // retrying can never succeed, so drop the row instead of leaking failures.
+    if (result.statusCode === 404 || result.statusCode === 410) {
+      await deleteByEndpoint(db, subscription.endpoint);
+      continue;
+    }
+
+    await markFailed(db, subscription.id);
+    await recordDelivery(db, {
+      subscriptionId: subscription.id,
+      eventId: notification.eventId,
+      eventType: notification.eventType,
+      status: "failed",
+      httpStatus: result.statusCode ?? null,
+      error: result.error ?? null,
+    });
+    ctx.logger.warn(
+      `push failed for subscription ${subscription.id}: ${result.statusCode ?? "no status"} ${result.error ?? ""}`,
+    );
+  }
+}
+
+const plugin = definePlugin({
+  async setup(ctx) {
+    const db = ctx.db as PluginDb;
+
+    // Generate the VAPID keypair eagerly so the settings page always has a
+    // public key to hand the browser, even before the first event fires.
+    try {
+      await ensureVapidKeypair(db);
+    } catch (error) {
+      ctx.logger.error(`could not ensure VAPID keypair: ${String(error)}`);
+    }
+
+    for (const eventType of NOTIFIABLE_EVENT_TYPES) {
+      ctx.events.on(eventType, async (event) => {
+        try {
+          await fanOut(ctx, db, event);
+        } catch (error) {
+          // A failed notification must never take the worker down: the next
+          // event is independent, and the delivery ledger records the rest.
+          ctx.logger.error(`fan-out failed for ${event.eventType}: ${String(error)}`);
+        }
+      });
+    }
+
+    /** Public client configuration: no secrets, safe for any board user. */
+    ctx.data.register("client-config", async () => {
+      const vapid = await ensureVapidKeypair(db);
+      return {
+        vapidPublicKey: vapid.publicKey,
+        eventTypes: NOTIFIABLE_EVENT_TYPES.map((type) => ({
+          type,
+          label: EVENT_TYPE_LABELS[type],
+          defaultEnabled: DEFAULT_EVENT_TYPES.includes(type),
+        })),
+        throttle: THROTTLE,
+      };
+    });
+
+    /**
+     * Register this browser for the authenticated caller.
+     *
+     * Identity comes from the host-supplied actor context, never from action
+     * params: the UI is same-origin app code and cannot be trusted to name the
+     * user a device belongs to.
+     */
+    ctx.actions.register("register-subscription", async (params, context) => {
+      const userId = context.actor.userId;
+      const companyId = context.companyId ?? context.actor.companyId;
+      if (!userId) throw new Error("A signed-in board user is required to enable notifications.");
+      if (!companyId) throw new Error("An active company is required to enable notifications.");
+
+      const subscription = parseSubscriptionInput(params.subscription);
+      if (!subscription) throw new Error("A valid push subscription is required.");
+
+      await upsertSubscription(db, {
+        userId,
+        companyId,
+        endpoint: subscription.endpoint,
+        p256dh: subscription.p256dh,
+        auth: subscription.auth,
+        eventTypes: sanitizeEventTypes(params.eventTypes),
+        label: typeof params.label === "string" ? params.label.slice(0, 100) : null,
+        userAgent: describeUserAgent(params.userAgent),
+        origin: normalizeOrigin(params.origin),
+      });
+
+      const devices = await listForUser(db, userId, companyId);
+      return { devices: await Promise.all(devices.map((device) => describeDevice(db, device))) };
+    });
+
+    ctx.actions.register("update-subscription", async (params, context) => {
+      const userId = context.actor.userId;
+      const companyId = context.companyId ?? context.actor.companyId;
+      if (!userId || !companyId) throw new Error("A signed-in board user and company are required.");
+      if (typeof params.endpoint !== "string") throw new Error("endpoint is required.");
+
+      await updateSubscriptionPreferences(db, {
+        userId,
+        endpoint: params.endpoint,
+        eventTypes: Array.isArray(params.eventTypes) ? sanitizeEventTypes(params.eventTypes) : undefined,
+        enabled: typeof params.enabled === "boolean" ? params.enabled : undefined,
+      });
+
+      const devices = await listForUser(db, userId, companyId);
+      return { devices: await Promise.all(devices.map((device) => describeDevice(db, device))) };
+    });
+
+    ctx.actions.register("remove-device", async (params, context) => {
+      const userId = context.actor.userId;
+      const companyId = context.companyId ?? context.actor.companyId;
+      if (!userId || !companyId) throw new Error("A signed-in board user and company are required.");
+      if (typeof params.endpoint !== "string") throw new Error("endpoint is required.");
+
+      await deleteSubscription(db, { userId, endpoint: params.endpoint });
+      const devices = await listForUser(db, userId, companyId);
+      return { devices: await Promise.all(devices.map((device) => describeDevice(db, device))) };
+    });
+
+    ctx.actions.register("list-devices", async (_params, context) => {
+      const userId = context.actor.userId;
+      const companyId = context.companyId ?? context.actor.companyId;
+      if (!userId || !companyId) return { devices: [] };
+
+      const devices = await listForUser(db, userId, companyId);
+      return { devices: await Promise.all(devices.map((device) => describeDevice(db, device))) };
+    });
+
+    /**
+     * Send a test push to the caller's own devices only — the quickest way for
+     * an operator to separate "the pipeline is broken" from "that event never
+     * happened".
+     */
+    ctx.actions.register("send-test", async (params, context) => {
+      const userId = context.actor.userId;
+      const companyId = context.companyId ?? context.actor.companyId;
+      if (!userId || !companyId) throw new Error("A signed-in board user and company are required.");
+
+      const devices = await listForUser(db, userId, companyId);
+      const vapid = await ensureVapidKeypair(db);
+      const payload: NotificationPayload = {
+        eventType: "plugin.test",
+        eventId: `test-${Date.now()}`,
+        title: "Paperclip notifications are on",
+        body: "This is a test push from the Web Push Notifications plugin.",
+        url: "/",
+        tag: "webpush-test",
+      };
+
+      const results: { endpoint: string; ok: boolean; statusCode?: number; error?: string }[] = [];
+      for (const device of devices) {
+        // An explicit endpoint means "test this one device"; otherwise test all.
+        if (typeof params.endpoint === "string" && params.endpoint !== device.endpoint) continue;
+        const result = await sendPush({
+          subscription: device,
+          payload,
+          vapid,
+          subject: resolveVapidSubject(device.origin, FALLBACK_VAPID_SUBJECT),
+        });
+        if (result.ok) {
+          await markDelivered(db, device.id);
+        } else if (result.statusCode === 404 || result.statusCode === 410) {
+          await deleteByEndpoint(db, device.endpoint);
+        } else {
+          await markFailed(db, device.id);
+        }
+        await recordDelivery(db, {
+          subscriptionId: device.id,
+          eventId: payload.eventId,
+          eventType: payload.eventType,
+          status: result.ok ? "delivered" : result.statusCode === 404 || result.statusCode === 410 ? "gone" : "failed",
+          httpStatus: result.statusCode ?? null,
+          error: result.error ?? null,
+        });
+        results.push({
+          endpoint: device.endpoint,
+          ok: result.ok,
+          statusCode: result.statusCode,
+          error: result.error,
+        });
+      }
+
+      const remaining = await listForUser(db, userId, companyId);
+      return {
+        results,
+        devices: await Promise.all(remaining.map((device) => describeDevice(db, device))),
+      };
+    });
+
+    ctx.jobs.register("prune-subscriptions", async (job) => {
+      const deliveries = await pruneDeliveries(db, RETENTION.deliveryDays);
+      const stale = await pruneNeverDelivered(
+        db,
+        RETENTION.staleFailureCount,
+        RETENTION.staleDays,
+      );
+      ctx.logger.info(
+        `prune run ${job.runId}: removed ${deliveries} delivery rows, ${stale} never-delivered subscriptions`,
+      );
+    });
+  },
+
+  async onHealth() {
+    return { status: "ok", message: "Web Push Notifications worker is running" };
+  },
+});
+
+export default plugin;
+
+runWorker(plugin, import.meta.url);
