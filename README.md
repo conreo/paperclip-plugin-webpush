@@ -355,6 +355,32 @@ limited to that directory. It **coexists** with Paperclip's own root-scoped
 `/sw.js` instead of replacing it, and registers no `fetch` listener, so it cannot
 interfere with the app's offline behaviour.
 
+### Styling
+
+The settings page is meant to be indistinguishable from Paperclip's own Company
+Settings page, and getting there has two constraints:
+
+- a plugin may not import host components, and
+- Tailwind only generates the classes the host's own sources use, so writing
+  `text-xs` or `rounded-md` in plugin code would produce no CSS at all.
+
+So `src/ui/styles.ts` reimplements the handful of primitives that page is built
+from — its `Field`/`ToggleField` rows, `ToggleSwitch` and the `sm` Button variants —
+against the host's own CSS variables, and injects them as a scoped stylesheet
+(`.pcp-*`, once per document, so the settings page and the toolbar button can both
+ask for it). A stylesheet rather than inline styles is what makes hover, focus
+rings, the disabled state and the dark-mode switch thumb expressible at all.
+
+The values are copied from the host sources literally, including details that are
+easy to miss: the switch is the status green (`--status-task-done`) rather than
+`--primary`, its thumb is an oblong moved with the `translate` property (Tailwind
+v4's `translate-x-4`, not `transform`), and the `text-*` utilities each carry a
+line-height, without which every control is a pixel or two taller than the host's.
+
+`scripts/compare-ui.mjs` verifies this rather than asserting it: it measures the
+host page and the plugin page in the same browser and prints a property-by-property
+diff, including resolving each token through the browser to compare colours.
+
 ### Data
 
 Subscriptions live in the plugin's own PostgreSQL namespace, never in core tables:
@@ -415,7 +441,7 @@ pnpm build         # esbuild -> dist/worker.js, dist/manifest.js, dist/ui/
 pnpm dev           # same, in watch mode
 ```
 
-Five Playwright checks run against a live instance. They use persistent Chrome
+Six browser-driven checks run against a live instance. They use persistent Chrome
 profiles (`SPIKE_PROFILE_DIR` overrides per check) because Chrome disables the Push
 API in incognito contexts, and shared helpers in `scripts/lib/browser.mjs`:
 
@@ -431,13 +457,28 @@ node scripts/e2e-config.mjs     # saves organization defaults, reloads, and prov
 Overrides: `SPIKE_BASE_URL`, `SPIKE_COMPANY_PREFIX`, `SPIKE_COMPANY_ID`,
 `SPIKE_PLUGIN_ID`, `SPIKE_CHROME_PATH`, `SPIKE_PROFILE_DIR`.
 
+Styling is checked without a browser suite of its own, because a screenshot only
+answers "does this look right" for a human eye:
+
+```bash
+node scripts/compare-ui.mjs     # measures the host's Company Settings primitives and
+                                # the plugin page in one browser, then prints a diff
+```
+
+It is read-only, and it reports the properties that would otherwise be judged by
+eye: font sizes and line-heights, control heights, padding, radius, and each colour
+resolved through the browser so it can be compared to the host's token.
+
 Three rules these checks follow, each learned from a false alarm that cost real
 debugging time:
 
-- **Assert an outcome, never an assumption.** They wait for the success notice and
-  for the device card marked *This browser*. A stale row from an earlier run
-  otherwise satisfies "a device is registered" instantly while this run's
-  registration silently failed.
+- **Assert an outcome, never an assumption.** They wait for the device card marked
+  *This browser*. A stale row from an earlier run otherwise satisfies "a device is
+  registered" instantly while this run's registration silently failed.
+- **Assert that outcome on state, not on wording.** A section is *labelled* "This
+  browser" and its description contains the word "registered", so matching text
+  there passes whether or not anything happened; both checks look for the device
+  card itself.
 - **Delete the Chrome profile to test first use.** A registration persists in a
   profile, so only a fresh profile exercises the path a new operator takes. This is
   what surfaced the service-worker activation race that made the very first

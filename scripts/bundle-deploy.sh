@@ -29,7 +29,7 @@ cp "$ROOT/package.json" "$TARGET/package.json"
 cat > "$TARGET/package.json" <<'JSON'
 {
   "name": "paperclip-plugin-webpush",
-  "version": "0.9.3",
+  "version": "0.10.0",
   "type": "module",
   "private": true,
   "description": "Desktop and Android Web Push notifications for Paperclip board events.",

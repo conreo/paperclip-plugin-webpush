@@ -14,6 +14,7 @@ import {
   launchProfile,
   openSettingsPage,
   readNotifications,
+  setDeviceTrigger,
   waitForNotification,
 } from "./lib/browser.mjs";
 
@@ -35,21 +36,7 @@ await enableNotifications(page);
 // before firing the event, otherwise the worker correctly finds nobody opted in.
 // Scope to this browser's own device card: the list may hold several
 // devices, and toggling the wrong one would leave this browser unsubscribed.
-const toggle = page
-  .locator('[data-testid="device-row"][data-device-current="true"]')
-  .getByLabel("A new task was created");
-if (!(await toggle.isChecked())) {
-  await toggle.click();
-  await page.waitForFunction(
-    () => {
-      const row = document.querySelector('[data-testid="device-row"][data-device-current="true"]');
-      const labels = [...(row?.querySelectorAll("label") ?? [])];
-      const match = labels.find((label) => /A new task was created/.test(label.textContent ?? ""));
-      return match?.querySelector("input")?.checked === true;
-    },
-    null,
-    { timeout: 15000 },
-  );
+if (await setDeviceTrigger(page, "issue.created", true)) {
   console.log("enabled the issue.created trigger for this device");
 }
 

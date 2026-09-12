@@ -36,7 +36,10 @@ export function pluginSettingsUrl() {
 
 export async function openSettingsPage(page) {
   await page.goto(pluginSettingsUrl(), { waitUntil: "domcontentloaded" });
-  await page.getByRole("heading", { name: "Notifications on this browser" }).waitFor({ timeout: 30000 });
+  // Wait on the page's own first control, not on a heading's wording: the layout
+  // has been restyled more than once, and a helper that greps a title fails the
+  // whole check when it changes.
+  await page.locator('[data-testid="enable-notifications"]').waitFor({ timeout: 30000 });
 }
 
 /**
@@ -68,13 +71,16 @@ export async function enableNotifications(page) {
   const outcome = await page
     .waitForFunction(
       () => {
+        // Wait on state, not on wording. The success condition is *this*
+        // browser's own device card, which is rendered only for the device whose
+        // endpoint matches the subscription this page holds — text matching is
+        // no good here, because the section is labelled "This browser" and its
+        // description contains the word "registered" whether or not the
+        // registration happened.
+        if (document.querySelector('[data-testid="device-row"][data-device-current="true"]')) {
+          return "success";
+        }
         const text = document.body.innerText;
-        // Wait on state, not on wording: the copy changed once already, and a
-        // helper that greps a sentence fails the whole suite when it does.
-        const registered =
-          /registered/.test(text) ||
-          Boolean(document.querySelector('[data-testid="device-row"][data-device-current="true"]'));
-        if (registered) return "success";
         const failure =
           /Notifications are blocked[^\n]*|Web Push needs[^\n]*|This browser does not support[^\n]*|Registration failed[^\n]*|Plugin configuration is still loading[^\n]*|A signed-in board user[^\n]*|A valid push subscription[^\n]*/.exec(
             text,
@@ -98,10 +104,41 @@ export async function enableNotifications(page) {
     );
   }
 
-  // "This browser" is rendered only for the device whose endpoint matches the
-  // subscription held by this page, so it proves *this* run registered *this*
-  // browser rather than reading a stale row.
-  await page.getByText("This browser").first().waitFor({ timeout: 20000 });
+  // This card exists only for the device whose endpoint matches the subscription
+  // held by this page, so it proves *this* run registered *this* browser rather
+  // than reading a stale row.
+  await page
+    .locator('[data-testid="device-row"][data-device-current="true"]')
+    .waitFor({ timeout: 20000 });
+}
+
+/**
+ * Turn one trigger on or off for *this* browser's own device card.
+ *
+ * Scoped to the current device on purpose: the list may hold several devices,
+ * and toggling a row belonging to another one would leave this browser
+ * unsubscribed. The control is the host's switch, so the state lives in
+ * `aria-checked` rather than in an input's `checked`.
+ */
+export async function setDeviceTrigger(page, eventType, enabled = true) {
+  const testId = `device-trigger-${eventType}`;
+  const toggle = page.locator(
+    `[data-testid="device-row"][data-device-current="true"] [data-testid="${testId}"]`,
+  );
+  await toggle.waitFor({ timeout: 20000 });
+  if (((await toggle.getAttribute("aria-checked")) === "true") === enabled) return false;
+
+  await toggle.click();
+  await page.waitForFunction(
+    ({ testId, enabled }) => {
+      const row = document.querySelector('[data-testid="device-row"][data-device-current="true"]');
+      const match = row?.querySelector(`[data-testid="${testId}"]`);
+      return Boolean(match) && (match.getAttribute("aria-checked") === "true") === enabled;
+    },
+    { testId, enabled },
+    { timeout: 15000 },
+  );
+  return true;
 }
 
 /** Read (and optionally clear) the notifications this origin has shown. */

@@ -11,6 +11,7 @@ import {
   sampleTemplateVars,
   type NotifiableEventType,
 } from "../notifications.js";
+import { usePluginStyles } from "./styles.js";
 
 type EventTypeOption = { type: string; label: string; defaultEnabled: boolean };
 type NotificationTemplate = { title?: string; body?: string };
@@ -92,114 +93,48 @@ function endpointTail(endpoint: string): string {
 }
 
 /**
- * Styling mirrors the host's settings layout using its own CSS variables: the
- * plugin UI may not import host components, and Tailwind only generates the
- * classes the host's own sources use.
+ * Layout and controls follow the host's Company Settings page: a `max-w-6xl`
+ * column, an icon-and-title header, then `max-w-2xl` sections introduced by an
+ * uppercase muted label with their controls in a `space-y-3` stack. The classes
+ * come from the plugin's own stylesheet (see `styles.ts`) because the plugin UI
+ * may not import host components.
  */
-const pageStyle = { display: "grid", gap: "2rem", maxWidth: "52rem" } as const;
-const sectionStyle = { display: "grid", gap: "0.75rem" } as const;
-const sectionHeader = { display: "grid", gap: "0.375rem" } as const;
-const headingStyle = { fontSize: "1.125rem", fontWeight: 600, margin: 0 } as const;
-const sectionTitle = { fontSize: "0.875rem", fontWeight: 600, margin: 0 } as const;
-const sectionDescription = {
-  fontSize: "0.875rem",
-  color: "var(--muted-foreground)",
-  margin: 0,
-  maxWidth: "42rem",
-} as const;
-const rowStyle = {
-  display: "flex",
-  gap: "1rem",
-  alignItems: "flex-start",
-  justifyContent: "space-between",
-} as const;
-const fieldLabel = { fontSize: "0.875rem", fontWeight: 600, margin: 0 } as const;
-const fieldHint = {
-  fontSize: "0.8125rem",
-  color: "var(--muted-foreground)",
-  margin: 0,
-  maxWidth: "42rem",
-} as const;
-const inputStyle = {
-  width: "100%",
-  padding: "0.375rem 0.5rem",
-  fontSize: "0.875rem",
-  fontFamily: "inherit",
-  color: "var(--foreground)",
-  background: "var(--background)",
-  border: "1px solid var(--input)",
-  borderRadius: "var(--radius-md)",
-} as const;
-const primaryButtonStyle = {
-  padding: "0.4rem 0.75rem",
-  fontSize: "0.875rem",
-  fontWeight: 500,
-  color: "var(--primary-foreground)",
-  background: "var(--primary)",
-  border: "1px solid transparent",
-  borderRadius: "var(--radius-md)",
-  cursor: "pointer",
-} as const;
-const secondaryButtonStyle = {
-  ...primaryButtonStyle,
-  color: "var(--foreground)",
-  background: "var(--background)",
-  border: "1px solid var(--border)",
-} as const;
-const checkboxStyle = {
-  accentColor: "var(--primary)",
-  width: "1rem",
-  height: "1rem",
-  marginTop: "0.125rem",
-  flexShrink: 0,
-} as const;
-const cardStyle = {
-  display: "grid",
-  gap: "0.5rem",
-  padding: "0.75rem",
-  border: "1px solid var(--border)",
-  borderRadius: "var(--radius-lg)",
-  background: "var(--card)",
-} as const;
-const subHeadingStyle = {
-  fontSize: "0.75rem",
-  fontWeight: 500,
-  letterSpacing: "0.05em",
-  textTransform: "uppercase" as const,
-  color: "var(--muted-foreground)",
-  margin: 0,
-} as const;
-const noticeStyle = { fontSize: "0.8125rem" } as const;
-const errorStyle = {
-  fontSize: "0.8125rem",
-  color: "var(--destructive)",
-  whiteSpace: "pre-wrap" as const,
-} as const;
-const buttonRowStyle = { display: "flex", flexWrap: "wrap" as const, gap: "0.5rem" } as const;
-
 function Section({
-  title,
-  description,
+  label,
   children,
   testId,
+  danger,
 }: {
-  title: string;
-  description?: string;
+  label: string;
   children: React.ReactNode;
   testId?: string;
+  danger?: boolean;
 }) {
   return (
-    <section style={sectionStyle} data-testid={testId}>
-      <div style={sectionHeader}>
-        <h2 style={sectionTitle}>{title}</h2>
-        {description ? <p style={sectionDescription}>{description}</p> : null}
-      </div>
-      {children}
+    <section className="pcp-section" data-testid={testId}>
+      <div className={danger ? "pcp-section-label-danger" : "pcp-section-label"}>{label}</div>
+      <div className="pcp-stack">{children}</div>
     </section>
   );
 }
 
-/** The host's General page uses a switch, not a checkbox; this mirrors it. */
+/** A labelled input, matching the host's `Field` (label above, control below). */
+function Field({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="pcp-field">
+      <span className="pcp-field-label">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+/** The host's ToggleSwitch: a switch, not a checkbox. */
 function Switch({
   checked,
   disabled,
@@ -222,64 +157,40 @@ function Switch({
       data-testid={testId}
       disabled={disabled}
       onClick={() => onChange(!checked)}
-      style={{
-        position: "relative",
-        flexShrink: 0,
-        width: "2.25rem",
-        height: "1.25rem",
-        padding: 0,
-        borderRadius: "999px",
-        border: "1px solid var(--border)",
-        background: checked ? "var(--primary)" : "var(--input)",
-        cursor: disabled ? "default" : "pointer",
-        transition: "background 140ms ease",
-      }}
+      className="pcp-switch"
     >
-      <span
-        style={{
-          position: "absolute",
-          top: "50%",
-          left: checked ? "calc(100% - 1.0625rem)" : "0.125rem",
-          transform: "translateY(-50%)",
-          width: "0.9375rem",
-          height: "0.9375rem",
-          borderRadius: "999px",
-          background: "var(--background)",
-          boxShadow: "0 1px 2px rgb(0 0 0 / 0.25)",
-          transition: "left 140ms ease",
-        }}
-      />
+      <span className="pcp-switch-thumb" />
     </button>
   );
 }
 
-function ToggleRow({
-  title,
-  description,
+/** A switch with its label on the left, matching the host's `ToggleField`. */
+function ToggleField({
+  label,
+  hint,
   checked,
   disabled,
   onChange,
   testId,
 }: {
-  title: string;
-  description: string;
+  label: string;
+  hint?: string;
   checked: boolean;
   disabled?: boolean;
   onChange: (next: boolean) => void;
   testId?: string;
 }) {
   return (
-    <label style={{ ...rowStyle, cursor: disabled ? "default" : "pointer" }}>
-      <span style={{ display: "grid", gap: "0.25rem" }}>
-        <span style={fieldLabel}>{title}</span>
-        <span style={fieldHint}>{description}</span>
-      </span>
-      <Switch checked={checked} disabled={disabled} onChange={onChange} label={title} testId={testId} />
-    </label>
+    <div className="pcp-toggle-row" title={hint}>
+      <span className="pcp-toggle-label">{label}</span>
+      <Switch checked={checked} disabled={disabled} onChange={onChange} label={label} testId={testId} />
+    </div>
   );
 }
 
 export function SettingsPage(props: PluginSettingsPageProps) {
+  usePluginStyles();
+
   const { data: config } = usePluginData<ClientConfig>("client-config");
   const registerSubscription = usePluginAction("register-subscription");
   const updateSubscription = usePluginAction("update-subscription");
@@ -383,13 +294,13 @@ export function SettingsPage(props: PluginSettingsPageProps) {
       if (!response.ok) {
         if (response.status === 403) {
           throw new Error(
-            "Only an instance admin can change these settings. Individual devices keep their own checkboxes below.",
+            "Only an instance admin can change these settings. Individual devices keep their own switches below.",
           );
         }
         const detail = await response.text().catch(() => "");
         throw new Error(`Save failed (HTTP ${response.status})${detail ? `: ${detail.slice(0, 160)}` : ""}`);
       }
-      setConfigNotice("Saved.");
+      setConfigNotice("Saved");
     } catch (cause) {
       setConfigError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -556,6 +467,16 @@ export function SettingsPage(props: PluginSettingsPageProps) {
   const thisBrowserRegistered = devices.some((device) => device.endpoint === currentEndpoint);
   const effectiveLabel = organizationLabel?.trim() || config?.organizationName || "Your organization";
   const showLabel = includeOrganizationLabel ?? true;
+  const eventTypes = config?.eventTypes ?? [];
+
+  const toggleDefaultTrigger = (eventType: string) => {
+    setDefaultTriggers((current) => {
+      const list = current ?? [];
+      return list.includes(eventType)
+        ? list.filter((entry) => entry !== eventType)
+        : [...list, eventType];
+    });
+  };
 
   /** A faithful preview of one trigger, rendered with sample placeholder values. */
   const preview = useMemo(() => {
@@ -583,27 +504,37 @@ export function SettingsPage(props: PluginSettingsPageProps) {
   };
 
   return (
-    <div style={pageStyle}>
-      <div style={{ display: "grid", gap: "0.375rem" }}>
-        <h1 style={headingStyle}>Notifications</h1>
-        <p style={sectionDescription}>
-          Delivered by this browser's own push service, so they arrive with the Paperclip tab closed.
+    <div className="pcp-page">
+      <div className="pcp-header">
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M10.268 21a2 2 0 0 0 3.464 0" />
+          <path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326" />
+        </svg>
+        <h1>Notifications</h1>
+      </div>
+
+      {notice ? <p className="pcp-hint">{notice}</p> : null}
+      {error ? <div className="pcp-error">{error}</div> : null}
+
+      <Section label="This browser">
+        <p className="pcp-hint">
+          A registered browser is stored against your account, not against one organization, so it keeps
+          receiving notifications from every organization you belong to.
           {secureContext ? "" : " This origin is not a secure context, so push is unavailable here."}
           {typeof Notification === "undefined" ? "" : ` Permission: ${permission}.`}
         </p>
-      </div>
-
-      {notice ? <div style={noticeStyle}>{notice}</div> : null}
-      {error ? <div style={errorStyle}>{error}</div> : null}
-
-      <Section
-        title="This browser"
-        description="Registering a browser creates a push subscription and stores it against your account, not against one organization."
-      >
-        <div style={buttonRowStyle}>
+        <div className="pcp-actions">
           <button
             type="button"
-            style={primaryButtonStyle}
+            className="pcp-btn"
             onClick={enable}
             disabled={busy || !config}
             data-testid="enable-notifications"
@@ -612,77 +543,70 @@ export function SettingsPage(props: PluginSettingsPageProps) {
           </button>
           <button
             type="button"
-            style={secondaryButtonStyle}
+            className="pcp-btn pcp-btn-outline"
             onClick={() => void runTest()}
             disabled={busy || devices.length === 0}
           >
             Send test notification
           </button>
           {currentEndpoint ? (
-            <button type="button" style={secondaryButtonStyle} onClick={disable} disabled={busy}>
+            <button
+              type="button"
+              className="pcp-btn pcp-btn-destructive"
+              onClick={disable}
+              disabled={busy}
+            >
               Turn off for this browser
             </button>
           ) : null}
         </div>
         {config ? (
-          <p style={fieldHint}>
+          <p className="pcp-hint">
             At most {config.throttle.max} notifications per device every {config.throttle.windowMinutes} minutes;
             anything beyond that is recorded as throttled.
           </p>
         ) : null}
       </Section>
 
-      <Section
-        title={`Registered devices (${devices.length})`}
-        description="One entry per browser profile that enabled notifications."
-      >
-        {devices.length === 0 ? (
-          <p style={fieldHint}>No device is registered for your account yet.</p>
-        ) : null}
+      <Section label={`Registered devices (${devices.length})`}>
+        <p className="pcp-hint">One entry per browser profile that enabled notifications.</p>
+        {devices.length === 0 ? <p className="pcp-hint">No device is registered for your account yet.</p> : null}
         {devices.map((device) => (
           <div
             key={device.endpoint}
-            style={cardStyle}
+            className="pcp-card"
             data-testid="device-row"
             data-device-current={device.endpoint === currentEndpoint ? "true" : "false"}
           >
-            <div style={{ ...rowStyle, alignItems: "center" }}>
-              <span style={fieldLabel}>
+            <div className="pcp-toggle-row">
+              <span className="pcp-field-label" style={{ margin: 0 }}>
                 {device.endpoint === currentEndpoint ? "This browser" : "Another device"}
               </span>
-              <code style={{ fontSize: "0.72rem", color: "var(--muted-foreground)" }}>
-                {endpointTail(device.endpoint)}
-              </code>
-              <span style={{ ...fieldHint, marginLeft: "auto" }}>
-                {device.deliveries[0]
-                  ? `last: ${device.deliveries[0].status} ${device.deliveries[0].eventType}`
-                  : "no deliveries yet"}
-              </span>
+              <span className="pcp-mono">{endpointTail(device.endpoint)}</span>
+            </div>
+            <p className="pcp-hint">
+              {device.deliveries[0]
+                ? `Last: ${device.deliveries[0].status} · ${device.deliveries[0].eventType}`
+                : "No deliveries yet"}
+            </p>
+
+            <div className="pcp-group">
+              {eventTypes.map((option) => (
+                <ToggleField
+                  key={option.type}
+                  label={option.label}
+                  checked={device.eventTypes.includes(option.type)}
+                  disabled={busy}
+                  onChange={() => void toggleEventType(device, option.type)}
+                  testId={`device-trigger-${option.type}`}
+                />
+              ))}
             </div>
 
-            <div style={{ display: "grid", gap: "0.25rem" }}>
-              {(config?.eventTypes ?? []).map((option) => {
-                const checked = device.eventTypes.includes(option.type);
-                return (
-                  <label key={option.type} style={{ ...rowStyle, alignItems: "center", cursor: "pointer" }}>
-                    <span style={{ fontSize: "0.8125rem" }}>{option.label}</span>
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      disabled={busy}
-                      onChange={() => void toggleEventType(device, option.type)}
-                      style={checkboxStyle}
-                      aria-label={option.label}
-                    />
-                  </label>
-                );
-              })}
-            </div>
-
-            <div style={buttonRowStyle}>
+            <div className="pcp-actions">
               <button
                 type="button"
-                style={secondaryButtonStyle}
+                className="pcp-btn pcp-btn-outline"
                 onClick={() => void runTest(device.endpoint)}
                 disabled={busy}
               >
@@ -690,7 +614,7 @@ export function SettingsPage(props: PluginSettingsPageProps) {
               </button>
               <button
                 type="button"
-                style={secondaryButtonStyle}
+                className="pcp-btn pcp-btn-destructive"
                 onClick={() => void remove(device.endpoint)}
                 disabled={busy}
               >
@@ -699,16 +623,9 @@ export function SettingsPage(props: PluginSettingsPageProps) {
             </div>
 
             {device.deliveries.length > 0 ? (
-              <ul
-                style={{
-                  margin: 0,
-                  paddingLeft: "1.1rem",
-                  fontSize: "0.72rem",
-                  color: "var(--muted-foreground)",
-                }}
-              >
+              <ul className="pcp-list">
                 {device.deliveries.map((delivery, index) => (
-                  <li key={`${delivery.createdAt}-${index}`}>
+                  <li key={`${delivery.createdAt}-${index}`} className="pcp-mono">
                     {delivery.status} · {delivery.eventType}
                     {delivery.httpStatus ? ` · HTTP ${delivery.httpStatus}` : ""}
                     {delivery.error ? ` · ${delivery.error.slice(0, 120)}` : ""}
@@ -720,14 +637,16 @@ export function SettingsPage(props: PluginSettingsPageProps) {
         ))}
       </Section>
 
-      <Section
-        title="Notification content"
-        description="Leave a field empty to keep the wording shown in it. Placeholders work in any field: {{org}} {{agent}} {{identifier}} {{title}} {{type}} {{scope}} {{run}} — a placeholder this notification has no value for renders as nothing."
-        testId="notification-content"
-      >
-        <ToggleRow
-          title="Show the organization name"
-          description="Puts the organization's name in front of notification titles, so you can tell which organization a notification came from."
+      <Section label="Notification content" testId="notification-content">
+        <p className="pcp-hint">
+          Leave a field empty to keep the wording shown in it. Placeholders work in any field: {"{{org}}"}{" "}
+          {"{{agent}}"} {"{{identifier}}"} {"{{title}}"} {"{{type}}"} {"{{scope}}"} {"{{run}}"} — a placeholder
+          this notification has no value for renders as nothing.
+        </p>
+
+        <ToggleField
+          label="Show the organization name"
+          hint="Puts the organization's name in front of notification titles, so you can tell which organization a notification came from."
           checked={showLabel}
           disabled={saving}
           onChange={setIncludeOrganizationLabel}
@@ -735,150 +654,151 @@ export function SettingsPage(props: PluginSettingsPageProps) {
         />
 
         {showLabel ? (
-          // Its own row rather than a footnote to the switch: this is an override,
-          // and the name it overrides is already known.
-          <div style={{ ...rowStyle, alignItems: "center" }}>
-            <span style={{ display: "grid", gap: "0.25rem" }}>
-              <span style={fieldLabel}>Name to show</span>
-              <span style={fieldHint}>
-                Leave empty to use the organization's own name
-                {config?.organizationName ? ` (${config.organizationName})` : ""}.
-              </span>
-            </span>
+          // Its own field rather than a footnote to the switch: this is an
+          // override, and the name it overrides is already known.
+          <Field label="Name to show">
             <input
               type="text"
+              className="pcp-input"
               value={organizationLabel ?? ""}
               placeholder={config?.organizationName ?? "Your organization"}
               onChange={(event) => setOrganizationLabel(event.target.value)}
-              style={{ ...inputStyle, maxWidth: "18rem" }}
-              aria-label="Name to show instead of the organization name"
               data-testid="org-label"
             />
-          </div>
+            <p className="pcp-hint" style={{ marginTop: "0.25rem" }}>
+              Leave empty to use the organization's own name
+              {config?.organizationName ? ` (${config.organizationName})` : ""}.
+            </p>
+          </Field>
         ) : null}
 
-        <ToggleRow
-          title="Include the agent's name"
-          description="Names the agent in notifications that are about one, such as a failed run or an approval an agent requested."
+        <ToggleField
+          label="Include the agent's name"
+          hint="Names the agent in notifications that are about one, such as a failed run or an approval an agent requested."
           checked={includeAgentName ?? true}
           disabled={saving}
           onChange={setIncludeAgentName}
           testId="include-agent-name"
         />
 
-        <p style={subHeadingStyle}>Per notification</p>
+        <div className="pcp-section-label">Per notification</div>
 
-        {(config?.eventTypes ?? []).map((option) => {
+        {eventTypes.map((option) => {
           const defaults = previewDefaults(option.type as NotifiableEventType);
           const shown = preview(option.type);
           const customised = Boolean(
             templates?.[option.type]?.title?.trim() || templates?.[option.type]?.body?.trim(),
           );
           return (
-            <div key={option.type} style={cardStyle}>
-              <span style={fieldLabel}>{option.label}</span>
-              <div style={{ display: "grid", gap: "0.375rem" }}>
+            <div key={option.type} className="pcp-group">
+              <Field label={`${option.label} title`}>
                 <input
                   type="text"
+                  className="pcp-input"
                   value={templates?.[option.type]?.title ?? ""}
                   placeholder={defaults.title}
                   onChange={(event) => setTemplateField(option.type, "title", event.target.value)}
-                  style={inputStyle}
-                  aria-label={`${option.label} notification title`}
                   data-testid={`template-title-${option.type}`}
                 />
+              </Field>
+              <Field label={`${option.label} body`}>
                 <input
                   type="text"
+                  className="pcp-input"
                   value={templates?.[option.type]?.body ?? ""}
                   placeholder={defaults.body}
                   onChange={(event) => setTemplateField(option.type, "body", event.target.value)}
-                  style={inputStyle}
-                  aria-label={`${option.label} notification body`}
                   data-testid={`template-body-${option.type}`}
                 />
-              </div>
+              </Field>
               {customised ? (
-                <p style={fieldHint}>
-                  As sent: <strong style={{ color: "var(--foreground)" }}>{shown.title}</strong> — {shown.body}
+                <p className="pcp-hint">
+                  As sent: <span className="pcp-strong">{shown.title}</span> — {shown.body}
                 </p>
               ) : null}
             </div>
           );
         })}
 
-        <div style={buttonRowStyle}>
+        <div className="pcp-actions">
           <button
             type="button"
-            style={primaryButtonStyle}
+            className="pcp-btn"
             onClick={() => void saveConfig()}
             disabled={saving || defaultTriggers === null}
             data-testid="save-notification-content"
           >
             {saving ? "Saving…" : "Save notification content"}
           </button>
+          <span className="pcp-hint">Saving requires an instance admin.</span>
+          {configNotice ? (
+            <span className="pcp-hint" data-testid="config-notice">
+              {configNotice}
+            </span>
+          ) : null}
         </div>
+        {configError ? (
+          <div className="pcp-error" data-testid="config-error">
+            {configError}
+          </div>
+        ) : null}
       </Section>
 
-      <Section
-        title="Organization defaults"
-        description="The triggers a browser starts with when someone clicks Enable notifications. Each device can still change its own set afterwards."
-        testId="org-defaults"
-      >
-        <div style={{ display: "grid", gap: "0.25rem" }}>
-          {(config?.eventTypes ?? []).map((option) => {
-            const checked = (defaultTriggers ?? []).includes(option.type);
-            return (
-              <label key={option.type} style={{ ...rowStyle, alignItems: "center", cursor: "pointer" }}>
-                <span style={{ fontSize: "0.8125rem" }}>{option.label}</span>
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  disabled={saving || defaultTriggers === null}
-                  onChange={() =>
-                    setDefaultTriggers((current) => {
-                      const list = current ?? [];
-                      return list.includes(option.type)
-                        ? list.filter((entry) => entry !== option.type)
-                        : [...list, option.type];
-                    })
-                  }
-                  style={checkboxStyle}
-                  aria-label={option.label}
-                />
-              </label>
-            );
-          })}
+      <Section label="Organization defaults" testId="org-defaults">
+        <p className="pcp-hint">
+          The triggers a browser starts with when someone clicks Enable notifications. Each device can still
+          change its own set afterwards.
+        </p>
+
+        <div className="pcp-group">
+          {eventTypes.map((option) => (
+            <ToggleField
+              key={option.type}
+              label={option.label}
+              checked={(defaultTriggers ?? []).includes(option.type)}
+              disabled={saving || defaultTriggers === null}
+              onChange={() => toggleDefaultTrigger(option.type)}
+              testId={`default-trigger-${option.type}`}
+            />
+          ))}
         </div>
 
-        <ToggleRow
-          title="Also notify about events that name nobody responsible"
-          description="When off, only events that name a responsible user notify anyone."
+        <ToggleField
+          label="Also notify about events that name nobody responsible"
+          hint="When off, only events that name a responsible user notify anyone."
           checked={notifyUnassigned ?? true}
           disabled={saving || notifyUnassigned === null}
           onChange={setNotifyUnassigned}
           testId="notify-unassigned"
         />
 
-        <div style={buttonRowStyle}>
+        <div className="pcp-actions">
           <button
             type="button"
-            style={primaryButtonStyle}
+            className="pcp-btn"
             onClick={() => void saveConfig()}
             disabled={saving || defaultTriggers === null || notifyUnassigned === null}
             data-testid="save-org-defaults"
           >
             {saving ? "Saving…" : "Save organization defaults"}
           </button>
+          {configNotice ? (
+            <span className="pcp-hint" data-testid="config-notice">
+              {configNotice}
+            </span>
+          ) : null}
         </div>
-        <p style={fieldHint}>Saving any of these settings requires an instance admin.</p>
-        {configNotice ? <div style={noticeStyle}>{configNotice}</div> : null}
-        {configError ? <div style={errorStyle}>{configError}</div> : null}
+        {configError ? (
+          <div className="pcp-error" data-testid="config-error">
+            {configError}
+          </div>
+        ) : null}
       </Section>
 
-      <p style={fieldHint}>
-        Notifications arrive through the browser's push service, so they reach you with the app closed. iOS Safari
-        only delivers Web Push to a site added to the Home Screen. The toolbar's fullscreen button gives an
-        immersive window in browsers that cannot install the app — for example a private, tailnet-only origin.
+      <p className="pcp-note">
+        Notifications arrive through the browser's push service, so they reach you with the app closed. iOS
+        Safari only delivers Web Push to a site added to the Home Screen. The toolbar's fullscreen button gives
+        an immersive window in browsers that cannot install the app — for example a private, tailnet-only origin.
       </p>
     </div>
   );

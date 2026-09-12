@@ -4,6 +4,7 @@ import {
   resolveFullscreenState,
   type FullscreenState,
 } from "../fullscreen.js";
+import { usePluginStyles } from "./styles.js";
 
 const UNSUPPORTED: FullscreenState = { supported: false, active: false };
 
@@ -59,6 +60,7 @@ function Icon({ entering }: { entering: boolean }) {
  * page reloads.
  */
 export function FullscreenButton() {
+  usePluginStyles();
   const [state, setState] = useState<FullscreenState>(readState);
 
   useEffect(() => {
@@ -96,18 +98,7 @@ export function FullscreenButton() {
       title={label}
       aria-pressed={state.active}
       onClick={() => void toggle()}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: "0.25rem",
-        border: 0,
-        borderRadius: "0.375rem",
-        background: "transparent",
-        color: "inherit",
-        cursor: "pointer",
-        opacity: 0.8,
-      }}
+      className="pcp-icon-btn"
     >
       <Icon entering={!state.active} />
     </button>
