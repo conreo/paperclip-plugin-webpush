@@ -20,6 +20,8 @@ import {
   enableNotifications,
   launchProfile,
   openSettingsPage,
+  deviceLedger,
+  openTriggerEditor,
   pluginSettingsUrl,
   waitForPushedMessage,
 } from "./lib/browser.mjs";
@@ -70,6 +72,7 @@ await enableNotifications(page);
 // --- 1. Compose a message out of objects and text ---------------------------
 // Start from the built-in wording so the assertions do not depend on whatever a
 // previous run left behind.
+await openTriggerEditor(page, TRIGGER);
 const reset = page.getByTestId(`reset-${TRIGGER}`);
 if (await reset.count()) {
   await reset.click();
@@ -136,6 +139,7 @@ if (/failed|admin/i.test(saved)) {
 await page.goto(pluginSettingsUrl(), { waitUntil: "domcontentloaded" });
 await page.locator('[data-testid="enable-notifications"]').waitFor({ timeout: 30000 });
 await page.waitForTimeout(2500);
+await openTriggerEditor(page, TRIGGER);
 
 const afterReload = await fieldValue(page, TITLE_FIELD);
 const reloadOk = afterReload === "{{type}} needs {{org}}";
@@ -157,6 +161,11 @@ console.log(
 );
 
 // --- 5. A real event must arrive with that wording -------------------------
+// Two independent signals, because they fail for different reasons: the ledger is
+// the plugin's own record that it sent something for this event, and the worker's
+// record of the last push is the text that actually reached the browser. Delivery
+// timing is the push service's business, so the text gets a much longer window.
+const runStartedAt = Date.now();
 let approvalId = null;
 try {
   const created = JSON.parse(
@@ -176,15 +185,35 @@ try {
   console.log(`created approval ${approvalId}`);
 
   const expectedTitle = `hire agent needs ${organisationName}`;
-  // Generous: how long a push service takes to deliver is not under the plugin's
-  // control, and a cold subscription has been observed to take tens of seconds.
-  const pushed = await waitForPushedMessage(page, (payload) => payload.title === expectedTitle, 90000);
-  console.log(
-    pushed.miss
-      ? `FAIL: the worker last showed ${JSON.stringify(pushed.last)} instead of ${JSON.stringify(expectedTitle)}`
-      : `PASS: the notification arrived as composed → ${JSON.stringify(pushed.title)}`,
+
+  // `payload.at` must be from this run: the worker's record survives between runs,
+  // so matching an older message would report a pass this run never earned.
+  const pushed = await waitForPushedMessage(
+    page,
+    (payload) => payload.title === expectedTitle && payload.at >= runStartedAt,
+    240000,
   );
-  if (pushed.miss) process.exitCode = 1;
+  if (pushed.miss) {
+    console.log(
+      `FAIL: no push within the window; the worker last showed ${JSON.stringify(pushed.last?.payload ?? null)}`,
+    );
+    process.exitCode = 1;
+  } else {
+    console.log(`PASS: the notification arrived as composed → ${JSON.stringify(pushed.title)}`);
+  }
+
+  // Corroborate with the plugin's own record that it sent something for this event.
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await openSettingsPage(page);
+  await page.waitForTimeout(3000);
+  const ledger = await deviceLedger(page);
+  const row = ledger.deliveries.find((text) => text.includes("approval.created")) ?? null;
+  console.log(
+    row
+      ? `PASS: the plugin recorded it → ${JSON.stringify(row)}`
+      : `FAIL: no delivery row for this event — the worker found no recipient (saw ${JSON.stringify(ledger.last)})`,
+  );
+  if (!row || !row.startsWith("delivered")) process.exitCode = 1;
 } finally {
   if (approvalId) {
     try {
@@ -197,6 +226,7 @@ try {
 }
 
 // --- 6. Restore the built-in wording ---------------------------------------
+await openTriggerEditor(page, TRIGGER);
 await page.getByTestId(`reset-${TRIGGER}`).click().catch(() => {});
 await page.waitForTimeout(500);
 await page.getByTestId("save-notification-content").click();

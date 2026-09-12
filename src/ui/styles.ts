@@ -142,6 +142,112 @@ export const PLUGIN_STYLES = `
 .dark .pcp-switch-thumb { background: var(--foreground); }
 
 /*
+ * One trigger: a row you can scan, and an editor you open.
+ *
+ * Seven triggers with their fields laid out flat is ~1,600px of scrolling in which
+ * the trigger's name, the field labels and the notification's own text were all
+ * 12px — nothing showed where one trigger ended and the next began. The row
+ * carries the name and a one-line preview, and the editor opens on demand, so the
+ * whole section is scannable and the controls appear only where they are wanted.
+ */
+.pcp-trigger { display: grid; border-top: 1px solid var(--border); }
+.pcp-trigger:first-of-type { border-top: 0; }
+
+.pcp-trigger-row {
+  display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 0.75rem;
+  width: 100%; padding: 0.625rem 0.5rem;
+  border: 0; border-radius: var(--radius-md);
+  background: transparent; color: inherit;
+  font-family: inherit; text-align: left; cursor: pointer;
+  transition: background-color 120ms;
+}
+.pcp-trigger-row:hover { background: color-mix(in oklab, var(--muted-foreground) 8%, transparent); }
+.pcp-trigger-row:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 50%, transparent);
+}
+.pcp-trigger-labels { display: grid; gap: 0.0625rem; min-width: 0; }
+.pcp-trigger-name {
+  font-size: 0.8125rem; line-height: 1.125rem; font-weight: 500; color: var(--foreground);
+}
+.pcp-trigger-summary {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 0.75rem; line-height: 1rem; color: var(--muted-foreground);
+}
+.pcp-badge {
+  padding: 0 0.375rem; border-radius: 9999px; white-space: nowrap;
+  background: color-mix(in oklab, var(--primary) 12%, transparent); color: var(--foreground);
+  font-size: 0.6875rem; line-height: 1rem;
+}
+.pcp-chevron {
+  width: 1rem; height: 1rem; color: var(--muted-foreground);
+  transition: rotate 140ms ease; rotate: 0deg;
+}
+.pcp-chevron[data-open="true"] { rotate: 180deg; }
+
+.pcp-trigger-body { display: grid; gap: 0.75rem; padding: 0 0.5rem 0.875rem; }
+
+/*
+ * The preview is drawn as the thing it will become. Two lines of muted text under
+ * a heading read as help text, and a title at the same size and weight as the
+ * field labels above it read as a third label — which is how "Northwind · Approval
+ * needed" and the body below it came out as one sentence.
+ */
+.pcp-notification {
+  display: grid; gap: 0.375rem;
+  width: min(24rem, 100%);
+  padding: 0.75rem;
+  background: var(--card); color: var(--card-foreground);
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.06), 0 8px 24px rgb(0 0 0 / 0.06);
+}
+.pcp-notification-head {
+  display: flex; align-items: center; gap: 0.375rem;
+  font-size: 0.6875rem; line-height: 1rem; color: var(--muted-foreground);
+}
+.pcp-notification-app { font-weight: 500; }
+.pcp-notification-time { margin-left: auto; }
+.pcp-notification-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 1rem; height: 1rem; border-radius: 0.25rem;
+  background: color-mix(in oklab, var(--primary) 12%, transparent); color: var(--foreground);
+}
+.pcp-notification-icon svg { width: 0.6875rem; height: 0.6875rem; }
+.pcp-notification-title { font-size: 0.875rem; line-height: 1.25rem; font-weight: 600; }
+.pcp-notification-body { font-size: 0.8125rem; line-height: 1.25rem; color: var(--muted-foreground); }
+
+/* The host's ToggleSwitch: a capsule with an oblong thumb, green when on. */
+.pcp-switch {
+  position: relative; display: inline-flex; flex-shrink: 0; align-items: center;
+  width: 2.75rem; height: 1.25rem;
+  padding: 0;
+  border: 2px solid transparent; border-radius: 9999px;
+  background: color-mix(in oklab, var(--input) 90%, transparent);
+  cursor: pointer; outline: none;
+  transition: background-color 120ms, border-color 120ms;
+}
+.pcp-switch[aria-checked="true"] {
+  border-color: var(--status-task-done);
+  background: var(--status-task-done);
+}
+.pcp-switch:disabled { cursor: not-allowed; opacity: 0.5; }
+.pcp-switch:focus-visible {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 30%, transparent);
+}
+.pcp-switch-thumb {
+  display: inline-block; pointer-events: none;
+  width: 1.5rem; height: 1rem;
+  border-radius: 9999px;
+  background: var(--background);
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.1);
+  transition: translate 140ms ease;
+  translate: 0 0;
+}
+.pcp-switch[aria-checked="true"] .pcp-switch-thumb { translate: 1rem 0; }
+.dark .pcp-switch-thumb { background: var(--foreground); }
+
+/*
  * One trigger's editor: its label, its two fields, and the preview of what will
  * actually be sent. A hairline between triggers keeps a long list readable
  * without boxing every entry.
@@ -240,22 +346,6 @@ export const PLUGIN_STYLES = `
 }
 .pcp-insert-item span { font-size: 0.75rem; line-height: 1rem; color: var(--muted-foreground); }
 
-/* "Reset" is a word, not a one-character icon, so it sizes as a small text button. */
-.pcp-reset {
-  width: auto; height: 1.25rem;
-  padding: 0 0.375rem;
-  font-family: inherit; font-size: 0.75rem; line-height: 1;
-}
-
-/* The preview is the promise: this is the text that will arrive. */
-.pcp-preview {
-  display: grid; gap: 0.125rem;
-  padding: 0.5rem 0.625rem;
-  border-radius: var(--radius-md);
-  background: color-mix(in oklab, var(--muted-foreground) 8%, transparent);
-  font-size: 0.75rem; line-height: 1rem; color: var(--muted-foreground);
-}
-.pcp-preview-title { color: var(--foreground); font-weight: 500; }
 `;
 
 /**

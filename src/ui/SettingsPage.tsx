@@ -120,6 +120,24 @@ function Section({
   );
 }
 
+/** The plugin's mark, used in the page header and as the preview's app icon. */
+function BellIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M10.268 21a2 2 0 0 0 3.464 0" />
+      <path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326" />
+    </svg>
+  );
+}
+
 /** A labelled field for a custom control, which must not be a `<label>` (see the editor). */
 function EditorField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -206,6 +224,9 @@ export function SettingsPage(props: PluginSettingsPageProps) {
   const [defaultTriggers, setDefaultTriggers] = useState<string[] | null>(null);
   const [notifyUnassigned, setNotifyUnassigned] = useState<boolean | null>(null);
   const [templates, setTemplates] = useState<Record<string, NotificationTemplate> | null>(null);
+  // Which trigger's editor is open. One at a time: the section is a list to scan,
+  // and two open editors at once is the wall of fields this replaced.
+  const [openTrigger, setOpenTrigger] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [configNotice, setConfigNotice] = useState<string | null>(null);
   const [configError, setConfigError] = useState<string | null>(null);
@@ -506,18 +527,7 @@ export function SettingsPage(props: PluginSettingsPageProps) {
   return (
     <div className="pcp-page">
       <div className="pcp-header">
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-        >
-          <path d="M10.268 21a2 2 0 0 0 3.464 0" />
-          <path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326" />
-        </svg>
+        <BellIcon />
         <h1>Notifications</h1>
       </div>
 
@@ -639,76 +649,127 @@ export function SettingsPage(props: PluginSettingsPageProps) {
 
       <Section label="Notification content" testId="notification-content">
         <p className="pcp-hint">
-          Change what a notification says by writing text and dropping objects into it. An object is inserted
-          from the list — never typed — so a message cannot hold a misspelled one, and the preview underneath
-          each trigger is exactly what will arrive. An empty field keeps the built-in wording.
+          Each trigger below shows what it will send. Open one to write your own wording: the text is
+          composed from words and objects, and an object is inserted from a list — never typed — so a
+          notification cannot arrive with a misspelled object in it. An empty field keeps the built-in
+          wording.
         </p>
 
         {eventTypes.map((option) => {
           const defaults = previewDefaults(option.type as NotifiableEventType, { agentName: SAMPLE_AGENT_NAME });
           const shown = preview(option.type);
           const template = templates?.[option.type];
+          const open = openTrigger === option.type;
           const suspicious = [template?.title, template?.body].some(
             (text) => text !== undefined && hasUnknownPlaceholder(text),
           );
+
           return (
             <div key={option.type} className="pcp-trigger" data-testid={`trigger-${option.type}`}>
-              <div className="pcp-toggle-row">
-                <span className="pcp-section-label">{option.label}</span>
-                {shown.customised ? (
-                  <button
-                    type="button"
-                    className="pcp-object-tool pcp-reset"
-                    onClick={() => clearTemplate(option.type)}
-                    disabled={saving}
-                    title="Put the built-in wording back"
-                    data-testid={`reset-${option.type}`}
-                  >
-                    Reset
-                  </button>
-                ) : null}
-              </div>
-
               {/*
-                Not the `Field` wrapper used elsewhere: that one is a <label>, and
-                a label forwards a click anywhere inside it to its first labelable
-                descendant — which here is the insert button. Clicking the text
-                would open the object list, and the next click would close it.
+                The row is the control: the trigger's name, what it sends, and whether
+                it has been customised. Everything else waits behind it, so the section
+                can be read in one screen instead of scrolled through.
               */}
-              <EditorField label="Title">
-                <TemplateEditor
-                  value={template?.title ?? ""}
-                  objects={templateObjectsFor(option.type as NotifiableEventType)}
-                  builtIn={defaults.title}
-                  onChange={(next) => setTemplateField(option.type, "title", next)}
-                  testId={`template-title-${option.type}`}
-                  ariaLabel={`${option.label} notification title`}
-                />
-              </EditorField>
-
-              <EditorField label="Body">
-                <TemplateEditor
-                  value={template?.body ?? ""}
-                  objects={templateObjectsFor(option.type as NotifiableEventType)}
-                  builtIn={defaults.body}
-                  onChange={(next) => setTemplateField(option.type, "body", next)}
-                  testId={`template-body-${option.type}`}
-                  ariaLabel={`${option.label} notification body`}
-                />
-              </EditorField>
-
-              <div className="pcp-preview">
-                <span data-testid={`preview-title-${option.type}`} className="pcp-preview-title">
-                  {shown.title}
+              <button
+                type="button"
+                className="pcp-trigger-row"
+                aria-expanded={open}
+                aria-controls={`trigger-body-${option.type}`}
+                onClick={() => setOpenTrigger(open ? null : option.type)}
+                data-testid={`open-${option.type}`}
+              >
+                <span className="pcp-trigger-labels">
+                  <span className="pcp-trigger-name">{option.label}</span>
+                  <span className="pcp-trigger-summary" data-testid={`summary-${option.type}`}>
+                    {shown.body ? `${shown.title} — ${shown.body}` : shown.title}
+                  </span>
                 </span>
-                <span data-testid={`preview-body-${option.type}`}>{shown.body}</span>
-              </div>
+                {shown.customised ? <span className="pcp-badge">Customised</span> : null}
+                <svg
+                  className="pcp-chevron"
+                  data-open={open ? "true" : "false"}
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="m6 9 6 6 6-6" />
+                </svg>
+              </button>
 
-              {suspicious ? (
-                <p className="pcp-hint">
-                  A {"{{name}}"} that is not in the insert list is not an object, so it arrives as written.
-                  Remove it, or insert the real object.
-                </p>
+              {open ? (
+                <div className="pcp-trigger-body" id={`trigger-body-${option.type}`}>
+                  {/*
+                    Not the `Field` wrapper used for the trigger switches: that one is
+                    a <label>, and a label forwards a click anywhere inside it to its
+                    first labelable descendant — which here is the insert button.
+                  */}
+                  <EditorField label="Title">
+                    <TemplateEditor
+                      value={template?.title ?? ""}
+                      objects={templateObjectsFor(option.type as NotifiableEventType)}
+                      builtIn={defaults.title}
+                      onChange={(next) => setTemplateField(option.type, "title", next)}
+                      testId={`template-title-${option.type}`}
+                      ariaLabel={`${option.label} notification title`}
+                    />
+                  </EditorField>
+
+                  <EditorField label="Body">
+                    <TemplateEditor
+                      value={template?.body ?? ""}
+                      objects={templateObjectsFor(option.type as NotifiableEventType)}
+                      builtIn={defaults.body}
+                      onChange={(next) => setTemplateField(option.type, "body", next)}
+                      testId={`template-body-${option.type}`}
+                      ariaLabel={`${option.label} notification body`}
+                    />
+                  </EditorField>
+
+                  <div>
+                    <span className="pcp-field-label">What gets sent</span>
+                    <div className="pcp-notification" data-testid={`preview-${option.type}`}>
+                      <div className="pcp-notification-head">
+                        <span className="pcp-notification-icon">
+                          <BellIcon />
+                        </span>
+                        <span className="pcp-notification-app">Paperclip</span>
+                        <span className="pcp-notification-time">now</span>
+                      </div>
+                      <div className="pcp-notification-title" data-testid={`preview-title-${option.type}`}>
+                        {shown.title}
+                      </div>
+                      <div className="pcp-notification-body" data-testid={`preview-body-${option.type}`}>
+                        {shown.body}
+                      </div>
+                    </div>
+                  </div>
+
+                  {suspicious ? (
+                    <p className="pcp-hint">
+                      A {"{{name}}"} that is not in the insert list is not an object, so it arrives as
+                      written. Remove it, or insert the real object.
+                    </p>
+                  ) : null}
+
+                  {shown.customised ? (
+                    <div className="pcp-actions">
+                      <button
+                        type="button"
+                        className="pcp-btn pcp-btn-outline"
+                        onClick={() => clearTemplate(option.type)}
+                        disabled={saving}
+                        data-testid={`reset-${option.type}`}
+                      >
+                        Put the built-in wording back
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
               ) : null}
             </div>
           );

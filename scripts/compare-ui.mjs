@@ -177,6 +177,11 @@ const host = await measure(
 await view.goto(pluginSettingsUrl(), { waitUntil: "domcontentloaded" });
 await view.locator('[data-testid="enable-notifications"]').waitFor({ timeout: 30000 });
 await view.waitForTimeout(3000);
+// The editor's field and shell live inside an accordion row, so open one before
+// measuring them.
+await view.locator('[data-testid^="open-"]').first().click();
+await view.locator(".pcp-editor-field").first().waitFor({ timeout: 15000 });
+await view.waitForTimeout(500);
 const plugin = await measure(
   view,
   Object.fromEntries(

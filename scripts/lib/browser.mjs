@@ -214,8 +214,10 @@ export async function settlePluginServiceWorker(page) {
  * delivery ledger says `delivered`. The worker itself knows what it displayed, so
  * ask it — this is the only way to assert on the *text* a real event produced.
  */
-export async function lastPushedMessage(page) {
-  await settlePluginServiceWorker(page);
+export async function lastPushedMessage(page, { settle = true } = {}) {
+  // Settling runs an update check, which is worth doing once before asking and
+  // wasteful on every poll of a long wait.
+  if (settle) await settlePluginServiceWorker(page);
   return page.evaluate(async () => {
     const resource = performance.getEntriesByType("resource")
       .map((entry) => entry.name)
@@ -241,17 +243,58 @@ export async function lastPushedMessage(page) {
   });
 }
 
-/** Poll until the worker's last push matches, so a message still in flight is waited for. */
+/**
+ * Poll until the worker's last push matches.
+ *
+ * How long a push service takes to deliver is not under the plugin's control, and
+ * a cold subscription has been observed to take minutes, so the caller sets a
+ * generous window and should assert on `payload.at` too: the worker's record
+ * survives between runs, and a match on an old message would report a pass that
+ * this run never earned.
+ */
 export async function waitForPushedMessage(page, predicate, timeoutMs = 30000) {
   const deadline = Date.now() + timeoutMs;
   let last = null;
+  let first = true;
   while (Date.now() < deadline) {
-    last = await lastPushedMessage(page);
+    last = await lastPushedMessage(page, { settle: first });
+    first = false;
     const payload = last?.payload;
     if (payload && predicate(payload)) return payload;
-    await page.waitForTimeout(750);
+    await page.waitForTimeout(2000);
   }
   return { miss: true, last };
+}
+
+/**
+ * Open one trigger's editor in the notification content list.
+ *
+ * The section is an accordion — a row per trigger, one editor open at a time — so a
+ * check that reaches straight for a title field finds nothing until the row is open.
+ * Idempotent, because a check may call it again after a reload.
+ */
+export async function openTriggerEditor(page, eventType) {
+  const row = page.getByTestId(`open-${eventType}`);
+  await row.waitFor({ timeout: 20000 });
+  if ((await row.getAttribute("aria-expanded")) !== "true") await row.click();
+  await page.locator(`[data-testid="template-title-${eventType}"]`).waitFor({ timeout: 20000 });
+}
+
+/**
+ * The delivery ledger rows shown for this browser's own device.
+ *
+ * Read after a reload: the settings page fetches the device list when it loads and
+ * after its own actions, not continuously, so a delivery that happens while the
+ * page sits open is not visible until the list is fetched again.
+ */
+export async function deviceLedger(page) {
+  return page.evaluate(() => {
+    const row = document.querySelector('[data-testid="device-row"][data-device-current="true"]');
+    return {
+      last: row?.querySelector(".pcp-hint")?.textContent?.trim() ?? null,
+      deliveries: [...(row?.querySelectorAll(".pcp-list li") ?? [])].map((li) => li.textContent.trim()),
+    };
+  });
 }
 
 /** Read (and optionally clear) the notifications this origin has shown. */

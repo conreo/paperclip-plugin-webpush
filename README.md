@@ -224,9 +224,19 @@ plugin-owned state, could be written by any board member through a plugin action
 The settings page reads them back through the worker, so a saved change is visible
 immediately and applies to browsers enabled from then on.
 
-**Notification wording** is editable in the same section, per trigger: a title and a
-body, each composed of text and **objects**. An empty field keeps the built-in wording,
-which the field shows as its placeholder.
+**Notification wording** is editable in the same section. Each trigger is a row showing
+its name and a one-line summary of what it sends; opening a row reveals its title and body,
+each composed of text and **objects**, and a preview of the message. An empty field keeps
+the built-in wording, which the field shows as its placeholder.
+
+The row list is deliberate: laid out flat, seven triggers with their fields is about
+1,600px of scrolling in which the trigger's name, the field labels and the notification's
+own text are all 12px — nothing shows where one trigger ends and the next begins. The rows
+put the same section in ~700px, and the controls appear only where they are wanted.
+
+The preview is drawn as the thing it becomes — an app icon, `Paperclip`, the title at 14px
+semibold, the body under it — rather than as two lines of muted text under a heading, which
+reads as help text and leaves you guessing which line is the title.
 
 An object is the value from the event — the organization, the agent, the task
 identifier, the task title, the approval type, the budget scope, the failed run. You do
