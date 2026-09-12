@@ -92,6 +92,30 @@ subscriber in that company who opted into that event type is notified, so an
 unassigned budget incident in one company does not buzz another company's
 subscribers.
 
+**Multiple organizations.** A notification is addressed to a *person*, so the
+device and its event-type toggles belong to that person and not to a company:
+
+- An event that names a responsible user reaches that user's devices **in any
+  company**. A device registered while looking at one company still receives what
+  its owner is responsible for in another.
+- An event that names nobody responsible goes to the devices of the event
+  company's **active human members** (read from the host with
+  `access.members.read`). It deliberately does not go to other companies'
+  subscribers. The company a device was registered from is provenance, not a
+  delivery gate — an earlier version used it as one, which meant unassigned
+  events only reached whichever company someone last clicked Enable in.
+- If the host cannot answer the membership question, the plugin falls back to the
+  company-scoped rule rather than dropping the notification.
+- Deep links always carry the event's own company prefix, so a notification from
+  one organization opens that organization.
+- There is one VAPID keypair per instance, and no per-organization preference
+  matrix: the toggles and the throttle are per device, shared across companies.
+
+**Devices.** One row per browser profile that registered. Removing a profile or a
+browser leaves its row behind, so the settings page offers **Remove** per device;
+the daily job prunes devices that failed at least five times and never once
+succeeded.
+
 **Throttle.** At most 12 pushes per device per 5 minutes. Suppressed pushes are
 recorded with status `throttled`, so the settings page can explain the gap.
 

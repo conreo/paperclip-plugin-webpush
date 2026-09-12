@@ -3,6 +3,7 @@ import type { PluginContext, PluginEvent } from "@paperclipai/plugin-sdk";
 import {
   DEFAULT_EVENT_TYPES,
   EVENT_TYPE_LABELS,
+  activeUserMemberIds,
   NOTIFIABLE_EVENT_TYPES,
   buildNotification,
   isNotifiableEventType,
@@ -20,6 +21,7 @@ import {
   ensureVapidKeypair,
   listEnabledForCompany,
   listEnabledForUser,
+  listEnabledForUsers,
   listForUser,
   listRecentDeliveries,
   markDelivered,
@@ -32,6 +34,13 @@ import {
   upsertSubscription,
   type PluginDb,
 } from "./store.js";
+
+/**
+ * Membership is read from the host and cached briefly: it changes rarely, and the
+ * fallback path consults it on every event that names nobody responsible.
+ */
+const MEMBERSHIP_TTL_MS = 5 * 60 * 1000;
+const memberCache = new Map<string, { userIds: string[]; at: number }>();
 
 /** Flood control: at most this many pushes per device inside the window. */
 const THROTTLE = { max: 12, windowMinutes: 5 };
@@ -57,6 +66,33 @@ async function companyPrefix(ctx: PluginContext, companyId: string): Promise<str
     return prefix;
   } catch (error) {
     ctx.logger.warn(`company prefix lookup failed for ${companyId}: ${String(error)}`);
+    return null;
+  }
+}
+
+/**
+ * Active human members of a company.
+ *
+ * Returns null when the host cannot answer, which is the signal to fall back to
+ * the older company-scoped rule: a host without `access.members.read` must not
+ * lose unassigned notifications entirely.
+ */
+async function companyMemberUserIds(
+  ctx: PluginContext,
+  companyId: string,
+): Promise<string[] | null> {
+  const cached = memberCache.get(companyId);
+  if (cached && Date.now() - cached.at < MEMBERSHIP_TTL_MS) return cached.userIds;
+
+  try {
+    const members = await ctx.access.members.list({ companyId });
+    const userIds = activeUserMemberIds(members);
+    memberCache.set(companyId, { userIds, at: Date.now() });
+    return userIds;
+  } catch (error) {
+    ctx.logger.warn(
+      `could not read members of company ${companyId}; falling back to the company-scoped broadcast: ${String(error)}`,
+    );
     return null;
   }
 }
@@ -130,12 +166,25 @@ async function fanOut(ctx: PluginContext, db: PluginDb, event: PluginEvent): Pro
   if (!notification) return;
 
   const responsibleUserId = responsibleUserIdOf(event);
-  const [companySubscriptions, responsibleSubscriptions] = await Promise.all([
-    listEnabledForCompany(db, event.companyId),
-    responsibleUserId ? listEnabledForUser(db, responsibleUserId) : Promise.resolve([]),
-  ]);
 
-  const recipients = planDelivery({ companySubscriptions, responsibleSubscriptions, event });
+  // An event that names a responsible user goes to that person's devices in any
+  // company. Otherwise it goes to the devices of the event company's members —
+  // not to the devices that happened to be registered from that company, which is
+  // an accident of where someone last clicked Enable rather than a preference.
+  let broadcastSubscriptions: SubscriptionTarget[] = [];
+  if (!responsibleUserId) {
+    const memberUserIds = await companyMemberUserIds(ctx, event.companyId);
+    broadcastSubscriptions =
+      memberUserIds === null
+        ? await listEnabledForCompany(db, event.companyId)
+        : await listEnabledForUsers(db, memberUserIds);
+  }
+
+  const responsibleSubscriptions = responsibleUserId
+    ? await listEnabledForUser(db, responsibleUserId)
+    : [];
+
+  const recipients = planDelivery({ responsibleSubscriptions, broadcastSubscriptions, event });
   // No recipients is a normal outcome (nobody opted in, or nobody is responsible
   // for this event yet) — it is not an error, so it records no delivery row.
   if (recipients.length === 0) return;

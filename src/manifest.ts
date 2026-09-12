@@ -22,6 +22,10 @@ const manifest: PaperclipPluginManifestV1 = {
     "database.namespace.write",
     "http.outbound",
     "companies.read",
+    // Resolves which humans belong to the event's company, so an unassigned event
+    // reaches that company's members instead of whichever devices were registered
+    // from it.
+    "access.members.read",
     "instance.settings.register",
     "plugin.state.read",
     "plugin.state.write",

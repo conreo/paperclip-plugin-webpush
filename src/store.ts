@@ -76,6 +76,26 @@ export async function listEnabledForUser(
   return rows.map(toTarget);
 }
 
+/**
+ * Enabled devices belonging to any of `userIds`, in any company.
+ *
+ * Used for the unassigned-event fallback, where the eligible owners are the
+ * active members of the event's company rather than the devices that happen to
+ * have been registered from it.
+ */
+export async function listEnabledForUsers(
+  db: PluginDb,
+  userIds: readonly string[],
+): Promise<SubscriptionTarget[]> {
+  if (userIds.length === 0) return [];
+  const rows = await db.query<SubscriptionRow>(
+    `select ${SUBSCRIPTION_COLUMNS} from ${db.namespace}.push_subscription
+      where enabled = true and user_id = any(string_to_array($1, ','))`,
+    [userIds.join(",")],
+  );
+  return rows.map(toTarget);
+}
+
 /** Every enabled subscription, regardless of company — used by the prune job. */
 export async function listAllEnabled(db: PluginDb): Promise<SubscriptionTarget[]> {
   const rows = await db.query<SubscriptionRow>(

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { PluginEvent } from "@paperclipai/plugin-sdk";
 import {
   DEFAULT_EVENT_TYPES,
+  activeUserMemberIds,
   NOTIFIABLE_EVENT_TYPES,
   buildNotification,
   resolveVapidSubject,
@@ -159,7 +160,6 @@ describe("planDelivery", () => {
       companyId: "company-2",
     });
     const recipients = planDelivery({
-      companySubscriptions: [],
       responsibleSubscriptions: [registeredElsewhere],
       event: event({ companyId: "company-1", payload: { responsibleUserId: "user-1" } }),
     });
@@ -168,7 +168,7 @@ describe("planDelivery", () => {
 
   it("notifies only the named responsible user, not their colleagues", () => {
     const recipients = planDelivery({
-      companySubscriptions: [subscription({ id: "theirs", userId: "user-2" })],
+      broadcastSubscriptions: [subscription({ id: "theirs", userId: "user-2" })],
       responsibleSubscriptions: [
         subscription({ id: "mine", userId: "user-1" }),
         subscription({ id: "theirs", userId: "user-2" }),
@@ -178,21 +178,19 @@ describe("planDelivery", () => {
     expect(recipients.map((entry) => entry.id)).toEqual(["mine"]);
   });
 
-  it("keeps the unassigned fallback inside the event's own company", () => {
-    // An unassigned budget incident must not buzz another company's subscribers.
+  it("uses exactly the broadcast devices the caller supplies", () => {
+    // Scope is the caller's decision: the worker narrows to the event company's
+    // members, so this function must not widen it again.
     const recipients = planDelivery({
-      companySubscriptions: [
-        subscription({ id: "here", companyId: "company-1" }),
-        subscription({ id: "there", companyId: "company-2" }),
-      ],
+      broadcastSubscriptions: [subscription({ id: "member", companyId: "company-2" })],
       event: event({ eventType: "budget.incident.opened", payload: {} }),
     });
-    expect(recipients.map((entry) => entry.id)).toEqual(["here"]);
+    expect(recipients.map((entry) => entry.id)).toEqual(["member"]);
   });
 
   it("stays silent when unassigned and broadcasting is disabled", () => {
     const recipients = planDelivery({
-      companySubscriptions: [subscription()],
+      broadcastSubscriptions: [subscription()],
       event: event({ payload: {} }),
       broadcastWhenUnassigned: false,
     });
@@ -201,7 +199,6 @@ describe("planDelivery", () => {
 
   it("honours the enabled flag and per-device event choices", () => {
     const recipients = planDelivery({
-      companySubscriptions: [],
       responsibleSubscriptions: [
         subscription({ id: "disabled", userId: "user-1", enabled: false }),
         subscription({ id: "opted-out", userId: "user-1", eventTypes: ["budget.incident.opened"] }),
@@ -214,11 +211,36 @@ describe("planDelivery", () => {
 
   it("treats an empty event list as 'everything'", () => {
     const recipients = planDelivery({
-      companySubscriptions: [],
       responsibleSubscriptions: [subscription({ userId: "user-1", eventTypes: [] })],
       event: event({ payload: { responsibleUserId: "user-1" } }),
     });
     expect(recipients).toHaveLength(1);
+  });
+});
+
+describe("activeUserMemberIds", () => {
+  it("keeps active humans and drops agents, pendings, and suspensions", () => {
+    // A notification is for a person. An agent member holds no browser, and a
+    // pending or suspended member cannot act on what they are told.
+    expect(
+      activeUserMemberIds([
+        { principalType: "user", principalId: "user-1", status: "active" },
+        { principalType: "agent", principalId: "agent-1", status: "active" },
+        { principalType: "user", principalId: "user-2", status: "pending" },
+        { principalType: "user", principalId: "user-3", status: "suspended" },
+        { principalType: "user", principalId: "user-4", status: "active" },
+      ]),
+    ).toEqual(["user-1", "user-4"]);
+  });
+
+  it("deduplicates and tolerates an empty roster", () => {
+    expect(
+      activeUserMemberIds([
+        { principalType: "user", principalId: "user-1", status: "active" },
+        { principalType: "user", principalId: "user-1", status: "active" },
+      ]),
+    ).toEqual(["user-1"]);
+    expect(activeUserMemberIds([])).toEqual([]);
   });
 });
 

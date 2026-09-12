@@ -210,6 +210,26 @@ export function responsibleUserIdOf(event: PluginEvent): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+/**
+ * The user ids of active human members.
+ *
+ * Agent principals are excluded: a notification is for a person, and an agent
+ * member holds no browser. Suspended and pending members are excluded for the
+ * same reason — they cannot act on what they are told.
+ */
+export function activeUserMemberIds(
+  members: readonly { principalType: string; principalId: string; status: string }[],
+): string[] {
+  const ids = new Set<string>();
+  for (const member of members) {
+    if (member.principalType !== "user") continue;
+    if (member.status !== "active") continue;
+    if (!member.principalId) continue;
+    ids.add(member.principalId);
+  }
+  return [...ids];
+}
+
 function wantsEventType(subscription: SubscriptionTarget, eventType: string): boolean {
   return subscription.eventTypes.length === 0 || subscription.eventTypes.includes(eventType);
 }
@@ -225,14 +245,21 @@ function wantsEventType(subscription: SubscriptionTarget, eventType: string): bo
  *    they registered while looking at company A; scoping delivery to the company
  *    a device was registered under silently drops every other company's events,
  *    which on a multi-company instance reads as "notifications are broken".
- *  - `companySubscriptions` are the device rows registered in the event's own
- *    company. They are the fallback for events that name nobody responsible, and
+ *  - `broadcastSubscriptions` are the devices of the event company's active
+ *    members. They are the fallback for events that name nobody responsible, and
  *    they deliberately stay company-scoped: an unassigned budget incident in one
- *    company should not buzz every other company's subscribers.
+ *    company must not buzz every other company's subscribers. The caller resolves
+ *    membership, so this stays a pure function.
  */
 export function planDelivery(input: {
-  companySubscriptions: SubscriptionTarget[];
+  /** Devices of the user the event names responsible, in any company. */
   responsibleSubscriptions?: SubscriptionTarget[];
+  /**
+   * Devices to use when the event names nobody responsible. The caller decides
+   * the scope and supplies exactly the eligible devices, so this module does not
+   * have to know how membership is resolved.
+   */
+  broadcastSubscriptions?: SubscriptionTarget[];
   event: PluginEvent;
   broadcastWhenUnassigned?: boolean;
 }): SubscriptionTarget[] {
@@ -244,7 +271,7 @@ export function planDelivery(input: {
         (subscription) => subscription.userId === responsibleUserId,
       )
     : (input.broadcastWhenUnassigned ?? true)
-      ? input.companySubscriptions.filter((subscription) => subscription.companyId === event.companyId)
+      ? (input.broadcastSubscriptions ?? [])
       : [];
 
   const seen = new Set<string>();
