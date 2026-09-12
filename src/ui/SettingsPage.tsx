@@ -5,6 +5,7 @@ import {
   type PluginSettingsPageProps,
 } from "@paperclipai/plugin-sdk/ui";
 import {
+  SAMPLE_AGENT_NAME,
   TEMPLATE_PLACEHOLDERS,
   previewDefaults,
   renderTemplate,
@@ -20,6 +21,7 @@ type ClientConfig = {
   notifyUnassignedEvents: boolean;
   organizationName: string | null;
   includeOrganizationLabel: boolean;
+  includeAgentName: boolean;
   templates: Record<string, NotificationTemplate>;
   throttle: { max: number; windowMinutes: number };
 };
@@ -253,6 +255,7 @@ export function SettingsPage(props: PluginSettingsPageProps) {
   const [notifyUnassigned, setNotifyUnassigned] = useState<boolean | null>(null);
   const [organizationLabel, setOrganizationLabel] = useState<string | null>(null);
   const [includeOrganizationLabel, setIncludeOrganizationLabel] = useState<boolean | null>(null);
+  const [includeAgentName, setIncludeAgentName] = useState<boolean | null>(null);
   const [templates, setTemplates] = useState<Record<string, NotificationTemplate> | null>(null);
   const [saving, setSaving] = useState(false);
   const [configNotice, setConfigNotice] = useState<string | null>(null);
@@ -271,6 +274,7 @@ export function SettingsPage(props: PluginSettingsPageProps) {
     setNotifyUnassigned((current) => current ?? config.notifyUnassignedEvents);
     setOrganizationLabel((current) => current ?? config.organizationName ?? "");
     setIncludeOrganizationLabel((current) => current ?? config.includeOrganizationLabel);
+    setIncludeAgentName((current) => current ?? config.includeAgentName);
     setTemplates((current) => current ?? { ...config.templates });
   }, [config]);
 
@@ -326,6 +330,7 @@ export function SettingsPage(props: PluginSettingsPageProps) {
             notifyUnassignedEvents: notifyUnassigned,
             ...(organizationLabel?.trim() ? { organizationLabel: organizationLabel.trim() } : {}),
             includeOrganizationLabel: includeOrganizationLabel ?? true,
+            includeAgentName: includeAgentName ?? true,
             templates: prunedTemplates,
           },
         }),
@@ -347,6 +352,7 @@ export function SettingsPage(props: PluginSettingsPageProps) {
     }
   }, [
     defaultTriggers,
+    includeAgentName,
     includeOrganizationLabel,
     notifyUnassigned,
     organizationLabel,
@@ -509,7 +515,9 @@ export function SettingsPage(props: PluginSettingsPageProps) {
   /** A faithful preview of one trigger, rendered with sample placeholder values. */
   const preview = useMemo(() => {
     return (eventType: string) => {
-      const defaults = previewDefaults(eventType as NotifiableEventType);
+      // The preview shows what an agent-created event would produce, while the
+      // field placeholders stay generic.
+      const defaults = previewDefaults(eventType as NotifiableEventType, { agentName: SAMPLE_AGENT_NAME });
       const vars = sampleTemplateVars(eventType as NotifiableEventType, effectiveLabel);
       const template = templates?.[eventType];
       const title = template?.title?.trim() ? renderTemplate(template.title, vars) : defaults.title;
@@ -676,8 +684,9 @@ export function SettingsPage(props: PluginSettingsPageProps) {
           <label style={{ display: "grid", gap: "0.25rem" }}>
             <span style={fieldLabel}>Organization name in notifications</span>
             <span style={fieldHint}>
-              Defaults to the organization's own name
-              {config?.organizationName ? ` (${config.organizationName})` : ""}.
+              Taken from the organization automatically
+              {config?.organizationName ? ` (${config.organizationName})` : ""} — set a value only to
+              override it in notifications.
             </span>
             <input
               type="text"
@@ -688,6 +697,15 @@ export function SettingsPage(props: PluginSettingsPageProps) {
               data-testid="org-label"
             />
           </label>
+
+          <ToggleRow
+            title="Include the agent's name"
+            description="Names the agent in notifications that are about one, such as a failed run or an approval an agent requested."
+            checked={includeAgentName ?? true}
+            disabled={saving}
+            onChange={setIncludeAgentName}
+            testId="include-agent-name"
+          />
 
           <ToggleRow
             title="Show the organization name"
@@ -729,7 +747,7 @@ export function SettingsPage(props: PluginSettingsPageProps) {
                 />
               </div>
               <p style={fieldHint}>
-                Placeholders: {["org", ...placeholders].map((name) => `{{${name}}}`).join(" ")} · Preview:{" "}
+                Placeholders: {["org", "agent", ...placeholders].map((name) => `{{${name}}}`).join(" ")} · Preview:{" "}
                 <strong style={{ color: "var(--foreground)" }}>{shown.title}</strong> — {shown.body}
               </p>
             </div>

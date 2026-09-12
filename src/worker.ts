@@ -4,6 +4,7 @@ import {
   DEFAULT_EVENT_TYPES,
   EVENT_TYPE_LABELS,
   activeUserMemberIds,
+  agentIdOf,
   NOTIFIABLE_EVENT_TYPES,
   buildNotification,
   isNotifiableEventType,
@@ -44,6 +45,30 @@ import {
  */
 const MEMBERSHIP_TTL_MS = 5 * 60 * 1000;
 const memberCache = new Map<string, { userIds: string[]; at: number }>();
+
+/**
+ * Agent display names, cached: a name changes rarely and the fan-out reads it on
+ * every event an agent caused.
+ */
+const agentNameCache = new Map<string, string | null>();
+
+async function agentName(
+  ctx: PluginContext,
+  companyId: string,
+  agentId: string,
+): Promise<string | null> {
+  const cacheKey = `${companyId}:${agentId}`;
+  if (agentNameCache.has(cacheKey)) return agentNameCache.get(cacheKey) ?? null;
+  try {
+    const agent = await ctx.agents.get(agentId, companyId);
+    const name = agent?.name?.trim() || null;
+    agentNameCache.set(cacheKey, name);
+    return name;
+  } catch (error) {
+    ctx.logger.warn(`could not resolve agent ${agentId}: ${String(error)}`);
+    return null;
+  }
+}
 
 /** Flood control: at most this many pushes per device inside the window. */
 const THROTTLE = { max: 12, windowMinutes: 5 };
@@ -201,7 +226,20 @@ async function fanOut(ctx: PluginContext, db: PluginDb, event: PluginEvent): Pro
   const settings = await companySettings(ctx, event.companyId);
   const config = settings.config;
 
-  const notification = buildNotification(event, settings.prefix, settings.presentation);
+  // Resolve the agent name only when something will use it: the built-in wording
+  // (the switch) or a template that asks for {{agent}}.
+  const agentId = agentIdOf(event);
+  const templatesUseAgent = Object.values(settings.presentation.templates).some((template) =>
+    `${template.title ?? ""}${template.body ?? ""}`.includes("{{agent}}"),
+  );
+  const agentNameForEvent =
+    agentId && (settings.presentation.includeAgentName || templatesUseAgent)
+      ? await agentName(ctx, event.companyId, agentId)
+      : null;
+
+  const notification = buildNotification(event, settings.prefix, settings.presentation, {
+    agentName: agentNameForEvent,
+  });
   if (!notification) return;
 
   const responsibleUserId = responsibleUserIdOf(event);

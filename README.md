@@ -226,17 +226,24 @@ immediately and applies to browsers enabled from then on.
 
 **Notification wording** is configurable too, in the same section:
 
-- **Organization name** — what notifications call your organization. Defaults to the
-  organization's own name.
+- **Organization name** — taken from the organization automatically; the field exists
+  only to override what notifications call it.
 - **Show the organization name** — prefixes notification titles, so a notification is
   attributable when you follow several organizations.
+- **Include the agent's name** — one switch for every notification type. It names the
+  agent wherever an event is about one, so a failed run reads "<agent> run failed" and
+  an approval an agent requested reads "<agent> requested a hire agent and is waiting
+  for a decision." The agent's display name is resolved from the host, not stored in
+  the event.
 - **Per notification** — a title and a body for each trigger. Empty fields keep the
   built-in wording; the settings page shows that wording as placeholder text and
   renders a live preview beside every field.
 
-Placeholders are filled in when the notification is sent: `{{org}}` everywhere, plus
-`{{identifier}}` and `{{title}}` for new tasks, `{{type}}` for approvals, `{{scope}}`
-for budget incidents, and `{{run}}` for failed runs. A valid placeholder with no value
+Placeholders are filled in when the notification is sent: `{{org}}` and `{{agent}}`
+everywhere, plus `{{identifier}}` and `{{title}}` for new tasks, `{{type}}` for
+approvals, `{{scope}}` for budget incidents, and `{{run}}` for failed runs. The
+`{{agent}}` placeholder resolves even when the agent-name switch is off — that switch
+governs the built-in wording only, so a template that asks for the name always gets it. A valid placeholder with no value
 for that event (an approval has no issue identifier) renders as nothing, while an
 unknown name is left verbatim so a typo is visible in the preview. If a custom title
 already places `{{org}}` itself, the automatic prefix is skipped rather than doubled.
@@ -316,6 +323,7 @@ enabled notifications, and `delivered` rows whenever something was pushed.
 | Host: npm + registry access | Only for npm-package installs. Local-path installs instead need `node_modules` shipped. |
 | Plugin capability `access.members.read` | Used to resolve who belongs to an organization, for events that name nobody responsible. |
 | Plugin capability `ui.action.register` | Renders the fullscreen toolbar button. |
+| Plugin capability `agents.read` | Resolves the display name of the agent a notification is about. |
 
 ---
 

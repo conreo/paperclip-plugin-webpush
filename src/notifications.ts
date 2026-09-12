@@ -102,7 +102,10 @@ function link(companyPrefix: string | null, path: string): string {
  * an empty field is what they will actually get. Derived from the same source as
  * delivery, so the two cannot drift.
  */
-export function previewDefaults(eventType: NotifiableEventType): { title: string; body: string } {
+export function previewDefaults(
+  eventType: NotifiableEventType,
+  context: NotificationEventContext = {},
+): { title: string; body: string } {
   const sample = {
     eventId: "preview",
     eventType,
@@ -112,7 +115,7 @@ export function previewDefaults(eventType: NotifiableEventType): { title: string
     entityType: "preview",
     payload: {},
   } as unknown as PluginEvent;
-  const draft = draftFor(sample, "COMPANY", eventType);
+  const draft = draftFor(sample, "COMPANY", eventType, context);
   return { title: draft.title, body: draft.body };
 }
 
@@ -132,7 +135,15 @@ export type NotificationPresentation = {
   /** Name to show for the organization; defaults to the company's own name. */
   organizationLabel: string | null;
   includeOrganizationLabel: boolean;
+  /** Enrich the built-in wording with the acting agent's name where one applies. */
+  includeAgentName: boolean;
   templates: Record<string, NotificationTemplate>;
+};
+
+/** Per-event facts the wording can use, resolved by the worker. */
+export type NotificationEventContext = {
+  /** Display name of the agent involved, when the event carries one. */
+  agentName?: string | null;
 };
 
 /**
@@ -149,19 +160,23 @@ export const TEMPLATE_PLACEHOLDERS: Record<NotifiableEventType, string[]> = {
   "issue.created": ["identifier", "title"],
 };
 
+/** The agent name the settings page uses to demonstrate placeholders. */
+export const SAMPLE_AGENT_NAME = "CodexCoder";
+
 /** Sample values so the settings page can render a faithful preview. */
 export function sampleTemplateVars(
   eventType: NotifiableEventType,
   organizationLabel: string,
 ): Record<string, string> {
   const samples: Record<string, string> = {
+    agent: SAMPLE_AGENT_NAME,
     type: "hire agent",
     identifier: "ACME-42",
     run: "12345678",
     scope: "monthly",
     title: "Ship the release",
   };
-  const vars: Record<string, string> = { org: organizationLabel };
+  const vars: Record<string, string> = { org: organizationLabel, agent: samples.agent };
   for (const name of TEMPLATE_PLACEHOLDERS[eventType] ?? []) {
     vars[name] = samples[name] ?? name;
   }
@@ -193,6 +208,7 @@ export function resolvePresentation(
     organizationLabel: label,
     includeOrganizationLabel:
       typeof config.includeOrganizationLabel === "boolean" ? config.includeOrganizationLabel : true,
+    includeAgentName: typeof config.includeAgentName === "boolean" ? config.includeAgentName : true,
     templates,
   };
 }
@@ -224,9 +240,15 @@ type Draft = {
 };
 
 /** The built-in wording and the values its placeholders can use. */
-function draftFor(event: PluginEvent, companyPrefix: string | null, eventType: NotifiableEventType): Draft {
+function draftFor(
+  event: PluginEvent,
+  companyPrefix: string | null,
+  eventType: NotifiableEventType,
+  context: NotificationEventContext = {},
+): Draft {
   const payload = asRecord(event.payload);
   const details = asRecord(payload.details);
+  const agentName = context.agentName?.trim() || null;
 
   switch (eventType) {
     case "decision.created":
@@ -235,9 +257,11 @@ function draftFor(event: PluginEvent, companyPrefix: string | null, eventType: N
       // where the choice is actually made.
       return {
         title: "Decision needed",
-        body: "A decision is waiting for your choice.",
+        body: agentName
+          ? `${agentName} needs a decision from you.`
+          : "A decision is waiting for your choice.",
         url: link(companyPrefix, "/decisions"),
-        vars: {},
+        vars: { agent: agentName },
       };
     case "decision.expired":
       return {
@@ -251,9 +275,11 @@ function draftFor(event: PluginEvent, companyPrefix: string | null, eventType: N
       const readable = approvalType.replaceAll("_", " ");
       return {
         title: "Approval needed",
-        body: `A ${readable} is waiting for a decision.`,
+        body: agentName
+          ? `${agentName} requested a ${readable} and is waiting for a decision.`
+          : `A ${readable} is waiting for a decision.`,
         url: link(companyPrefix, `/approvals/${event.entityId ?? ""}`),
-        vars: { type: readable },
+        vars: { type: readable, agent: agentName },
       };
     }
     case "issue.assignment_wakeup_requested": {
@@ -262,17 +288,19 @@ function draftFor(event: PluginEvent, companyPrefix: string | null, eventType: N
         title: "Task assigned",
         body: identifier ? `${identifier} is waiting on you.` : "A task is waiting on you.",
         url: link(companyPrefix, `/issues/${event.entityId ?? ""}`),
-        vars: { identifier },
+        vars: { identifier, agent: null },
       };
     }
     case "agent.run.failed": {
       const runRef = shortId(payload.runId);
       const issueId = (payload.issueId as string | undefined) ?? event.entityId ?? "";
       return {
-        title: "Agent run failed",
+        // The agent's name is the useful part of this notification, so it leads
+        // the title whenever the caller resolved one.
+        title: agentName ? `${agentName} run failed` : "Agent run failed",
         body: runRef ? `Run ${runRef} failed.` : "An agent run failed.",
         url: link(companyPrefix, `/issues/${issueId}`),
-        vars: { run: runRef, identifier: null },
+        vars: { run: runRef, identifier: null, agent: agentName },
       };
     }
     case "budget.incident.opened": {
@@ -282,7 +310,7 @@ function draftFor(event: PluginEvent, companyPrefix: string | null, eventType: N
         title: "Budget threshold crossed",
         body: `A ${readable} incident was opened.`,
         url: link(companyPrefix, "/activity/budgets"),
-        vars: { scope: readable },
+        vars: { scope: readable, agent: null },
       };
     }
     case "issue.created": {
@@ -292,7 +320,7 @@ function draftFor(event: PluginEvent, companyPrefix: string | null, eventType: N
         title: identifier ? `New task ${identifier}` : "New task",
         body: issueTitle ?? "A task was created.",
         url: link(companyPrefix, `/issues/${event.entityId ?? ""}`),
-        vars: { identifier, title: issueTitle },
+        vars: { identifier, title: issueTitle, agent: null },
       };
     }
   }
@@ -311,6 +339,7 @@ export function buildNotification(
   event: PluginEvent,
   companyPrefix: string | null,
   presentation?: NotificationPresentation,
+  context?: NotificationEventContext | null,
 ): NotificationPayload | null {
   // Read the name into a plain string first. Narrowing `event.eventType` directly
   // intersects the host's name with the installed SDK's `PluginEventType` union,
@@ -320,10 +349,19 @@ export function buildNotification(
   const eventType: string = event.eventType;
   if (!isNotifiableEventType(eventType)) return null;
 
-  const draft = draftFor(event, companyPrefix, eventType);
+  const draft = draftFor(
+    event,
+    companyPrefix,
+    eventType,
+    presentation?.includeAgentName === false ? {} : (context ?? {}),
+  );
   const template = presentation?.templates[eventType];
   const vars: Record<string, string | null | undefined> = {
     ...draft.vars,
+    // The placeholder is always available, whatever the switch says: the switch
+    // only decides whether the *built-in* wording uses the name. A template that
+    // asks for {{agent}} gets it either way.
+    agent: context?.agentName ?? draft.vars.agent ?? null,
     org: presentation?.organizationLabel ?? null,
   };
 
@@ -391,6 +429,27 @@ export function resolvePluginConfig(raw: unknown): ResolvedPluginConfig {
     notifyUnassignedEvents:
       typeof config.notifyUnassignedEvents === "boolean" ? config.notifyUnassignedEvents : true,
   };
+}
+
+/**
+ * The agent an event is about, from the three places the host puts one.
+ *
+ * `payload.agentId` is the activity actor's agent, `details.originAgentId` is the
+ * agent a decision came from, and `actorId` carries the agent when an agent acted
+ * directly. Agent ids are UUIDs; anything else is ignored rather than looked up.
+ */
+export function agentIdOf(event: PluginEvent): string | null {
+  const payload = asRecord(event.payload);
+  const details = asRecord(payload.details);
+  const candidates = [
+    payload.agentId,
+    details.originAgentId,
+    event.actorType === "agent" ? event.actorId : null,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim().length > 0) return candidate.trim();
+  }
+  return null;
 }
 
 /** The user the activity log holds responsible for an event, if it named one. */

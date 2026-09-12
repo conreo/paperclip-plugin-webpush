@@ -356,6 +356,7 @@ describe("buildNotification with configured text", () => {
   const presentation = (overrides: Partial<Parameters<typeof buildNotification>[2]> = {}) => ({
     organizationLabel: "Acme",
     includeOrganizationLabel: true,
+    includeAgentName: true,
     templates: {},
     ...overrides,
   });
@@ -395,6 +396,51 @@ describe("buildNotification with configured text", () => {
   it("can omit the label entirely", () => {
     const notification = buildNotification(event(), "ACME", presentation({ includeOrganizationLabel: false }));
     expect(notification?.title).toBe("Approval needed");
+  });
+
+  it("names the agent in the wording it is about", () => {
+    const failed = buildNotification(
+      event({ eventType: "agent.run.failed", entityId: "run-1", payload: { runId: "1234567890ab" } }),
+      "ACME",
+      presentation(),
+      { agentName: "CodexCoder" },
+    );
+    expect(failed?.title).toBe("Acme · CodexCoder run failed");
+
+    expect(buildNotification(event(), "ACME", presentation(), { agentName: "CodexCoder" })?.body).toBe(
+      "CodexCoder requested a request and is waiting for a decision.",
+    );
+  });
+
+  it("leaves the agent out of the built-in wording when the switch is off", () => {
+    const notification = buildNotification(
+      event({ eventType: "agent.run.failed", entityId: "run-1" }),
+      "ACME",
+      presentation({ includeAgentName: false }),
+      { agentName: "CodexCoder" },
+    );
+    expect(notification?.title).toBe("Acme · Agent run failed");
+  });
+
+  it("still resolves {{agent}} in a template when the switch is off", () => {
+    // The switch governs the built-in wording only; a template that asks for the
+    // name gets it either way.
+    const notification = buildNotification(
+      event(),
+      "ACME",
+      presentation({ includeAgentName: false, templates: { "approval.created": { body: "{{agent}} needs you" } } }),
+      { agentName: "CodexCoder" },
+    );
+    expect(notification?.body).toBe("CodexCoder needs you");
+  });
+
+  it("empties {{agent}} for an event that involves no agent", () => {
+    const notification = buildNotification(
+      event({ eventType: "budget.incident.opened", payload: {} }),
+      "ACME",
+      presentation({ templates: { "budget.incident.opened": { body: "scope={{scope}} agent={{agent}}" } } }),
+    );
+    expect(notification?.body).toBe("scope=budget agent=");
   });
 
   it("previews the built-in wording for the settings page", () => {
