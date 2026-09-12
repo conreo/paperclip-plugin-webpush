@@ -6,8 +6,9 @@ import {
   NOTIFIABLE_EVENT_TYPES,
   buildNotification,
   isNotifiableEventType,
+  planDelivery,
   resolveVapidSubject,
-  selectRecipients,
+  responsibleUserIdOf,
   shouldThrottle,
   type NotificationPayload,
   type SubscriptionTarget,
@@ -18,6 +19,7 @@ import {
   deleteSubscription,
   ensureVapidKeypair,
   listEnabledForCompany,
+  listEnabledForUser,
   listForUser,
   listRecentDeliveries,
   markDelivered,
@@ -127,8 +129,15 @@ async function fanOut(ctx: PluginContext, db: PluginDb, event: PluginEvent): Pro
   const notification = buildNotification(event, await companyPrefix(ctx, event.companyId));
   if (!notification) return;
 
-  const subscriptions = await listEnabledForCompany(db, event.companyId);
-  const recipients = selectRecipients(subscriptions, event);
+  const responsibleUserId = responsibleUserIdOf(event);
+  const [companySubscriptions, responsibleSubscriptions] = await Promise.all([
+    listEnabledForCompany(db, event.companyId),
+    responsibleUserId ? listEnabledForUser(db, responsibleUserId) : Promise.resolve([]),
+  ]);
+
+  const recipients = planDelivery({ companySubscriptions, responsibleSubscriptions, event });
+  // No recipients is a normal outcome (nobody opted in, or nobody is responsible
+  // for this event yet) — it is not an error, so it records no delivery row.
   if (recipients.length === 0) return;
 
   const vapid = await ensureVapidKeypair(db);
@@ -252,7 +261,7 @@ const plugin = definePlugin({
         origin: normalizeOrigin(params.origin),
       });
 
-      const devices = await listForUser(db, userId, companyId);
+      const devices = await listForUser(db, userId);
       return { devices: await Promise.all(devices.map((device) => describeDevice(db, device))) };
     });
 
@@ -269,7 +278,7 @@ const plugin = definePlugin({
         enabled: typeof params.enabled === "boolean" ? params.enabled : undefined,
       });
 
-      const devices = await listForUser(db, userId, companyId);
+      const devices = await listForUser(db, userId);
       return { devices: await Promise.all(devices.map((device) => describeDevice(db, device))) };
     });
 
@@ -280,7 +289,7 @@ const plugin = definePlugin({
       if (typeof params.endpoint !== "string") throw new Error("endpoint is required.");
 
       await deleteSubscription(db, { userId, endpoint: params.endpoint });
-      const devices = await listForUser(db, userId, companyId);
+      const devices = await listForUser(db, userId);
       return { devices: await Promise.all(devices.map((device) => describeDevice(db, device))) };
     });
 
@@ -289,7 +298,7 @@ const plugin = definePlugin({
       const companyId = context.companyId ?? context.actor.companyId;
       if (!userId || !companyId) return { devices: [] };
 
-      const devices = await listForUser(db, userId, companyId);
+      const devices = await listForUser(db, userId);
       return { devices: await Promise.all(devices.map((device) => describeDevice(db, device))) };
     });
 
@@ -303,7 +312,7 @@ const plugin = definePlugin({
       const companyId = context.companyId ?? context.actor.companyId;
       if (!userId || !companyId) throw new Error("A signed-in board user and company are required.");
 
-      const devices = await listForUser(db, userId, companyId);
+      const devices = await listForUser(db, userId);
       const vapid = await ensureVapidKeypair(db);
       const payload: NotificationPayload = {
         eventType: "plugin.test",
@@ -347,7 +356,7 @@ const plugin = definePlugin({
         });
       }
 
-      const remaining = await listForUser(db, userId, companyId);
+      const remaining = await listForUser(db, userId);
       return {
         results,
         devices: await Promise.all(remaining.map((device) => describeDevice(db, device))),

@@ -159,36 +159,59 @@ export type SubscriptionTarget = {
   origin: string | null;
 };
 
+/** The user the activity log holds responsible for an event, if it named one. */
+export function responsibleUserIdOf(event: PluginEvent): string | null {
+  const value = asRecord(event.payload).responsibleUserId;
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function wantsEventType(subscription: SubscriptionTarget, eventType: string): boolean {
+  return subscription.eventTypes.length === 0 || subscription.eventTypes.includes(eventType);
+}
+
 /**
- * Decide which subscriptions should receive one event.
+ * Decide which subscriptions receive one event.
  *
- * Targeting rule: the activity log stamps every event with
- * `payload.responsibleUserId` — the user who owns the entity the event is about.
- * When that is present, only that user's devices are notified, because waking
- * every board member for someone else's approval is the fastest way to get a
- * notification feature muted. When it is absent, the event belongs to no
- * specific person, so every subscriber in the company who opted into that event
- * type hears about it.
+ * Two candidate sets feed this, and the difference is the whole point:
+ *
+ *  - `responsibleSubscriptions` are the device rows of the user the activity log
+ *    named as responsible, fetched **regardless of company**. A person who is
+ *    responsible for an approval in company B must hear about it on the device
+ *    they registered while looking at company A; scoping delivery to the company
+ *    a device was registered under silently drops every other company's events,
+ *    which on a multi-company instance reads as "notifications are broken".
+ *  - `companySubscriptions` are the device rows registered in the event's own
+ *    company. They are the fallback for events that name nobody responsible, and
+ *    they deliberately stay company-scoped: an unassigned budget incident in one
+ *    company should not buzz every other company's subscribers.
  */
-export function selectRecipients(
-  subscriptions: SubscriptionTarget[],
-  event: PluginEvent,
-  options: { broadcastWhenUnassigned?: boolean } = {},
-): SubscriptionTarget[] {
-  const broadcast = options.broadcastWhenUnassigned ?? true;
-  const eligible = subscriptions.filter(
-    (subscription) =>
-      subscription.enabled &&
-      subscription.companyId === event.companyId &&
-      (subscription.eventTypes.length === 0 || subscription.eventTypes.includes(event.eventType)),
-  );
+export function planDelivery(input: {
+  companySubscriptions: SubscriptionTarget[];
+  responsibleSubscriptions?: SubscriptionTarget[];
+  event: PluginEvent;
+  broadcastWhenUnassigned?: boolean;
+}): SubscriptionTarget[] {
+  const { event } = input;
+  const responsibleUserId = responsibleUserIdOf(event);
 
-  const responsibleUserId = asRecord(event.payload).responsibleUserId;
-  if (typeof responsibleUserId === "string" && responsibleUserId.length > 0) {
-    return eligible.filter((subscription) => subscription.userId === responsibleUserId);
+  const candidates = responsibleUserId
+    ? (input.responsibleSubscriptions ?? []).filter(
+        (subscription) => subscription.userId === responsibleUserId,
+      )
+    : (input.broadcastWhenUnassigned ?? true)
+      ? input.companySubscriptions.filter((subscription) => subscription.companyId === event.companyId)
+      : [];
+
+  const seen = new Set<string>();
+  const recipients: SubscriptionTarget[] = [];
+  for (const subscription of candidates) {
+    if (!subscription.enabled) continue;
+    if (!wantsEventType(subscription, event.eventType)) continue;
+    if (seen.has(subscription.id)) continue;
+    seen.add(subscription.id);
+    recipients.push(subscription);
   }
-
-  return broadcast ? eligible : [];
+  return recipients;
 }
 
 /**

@@ -58,6 +58,24 @@ export async function listEnabledForCompany(
   return rows.map(toTarget);
 }
 
+/**
+ * Every enabled device belonging to one user, in any company.
+ *
+ * Delivery for a named responsible user is user-scoped, not company-scoped: the
+ * device is a browser, and the person is the same person in every company.
+ */
+export async function listEnabledForUser(
+  db: PluginDb,
+  userId: string,
+): Promise<SubscriptionTarget[]> {
+  const rows = await db.query<SubscriptionRow>(
+    `select ${SUBSCRIPTION_COLUMNS} from ${db.namespace}.push_subscription
+      where user_id = $1 and enabled = true`,
+    [userId],
+  );
+  return rows.map(toTarget);
+}
+
 /** Every enabled subscription, regardless of company — used by the prune job. */
 export async function listAllEnabled(db: PluginDb): Promise<SubscriptionTarget[]> {
   const rows = await db.query<SubscriptionRow>(
@@ -66,17 +84,17 @@ export async function listAllEnabled(db: PluginDb): Promise<SubscriptionTarget[]
   return rows.map(toTarget);
 }
 
-/** A user's own devices, enabled or not, for the settings page. */
-export async function listForUser(
-  db: PluginDb,
-  userId: string,
-  companyId: string,
-): Promise<SubscriptionTarget[]> {
+/**
+ * A user's own devices, enabled or not, for the settings page — across every
+ * company, so the page can say "this browser" no matter which company's settings
+ * it was registered from.
+ */
+export async function listForUser(db: PluginDb, userId: string): Promise<SubscriptionTarget[]> {
   const rows = await db.query<SubscriptionRow>(
     `select ${SUBSCRIPTION_COLUMNS} from ${db.namespace}.push_subscription
-      where user_id = $1 and company_id = $2
+      where user_id = $1
       order by created_at asc`,
-    [userId, companyId],
+    [userId],
   );
   return rows.map(toTarget);
 }

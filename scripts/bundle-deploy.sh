@@ -12,7 +12,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TARGET="${1:-$ROOT/.cache/deploy-webpush}"
+# Resolve to an absolute path: a relative target is easy to misread later, and a
+# stale bundle elsewhere in the tree is worse than no bundle at all.
+TARGET="$(cd "$ROOT" && mkdir -p "$(dirname "${1:-.cache/deploy-webpush}")" && cd "$(dirname "${1:-.cache/deploy-webpush}")" && pwd)/$(basename "${1:-.cache/deploy-webpush}")"
 
 echo "==> building"
 (cd "$ROOT" && pnpm build)
@@ -27,7 +29,7 @@ cp "$ROOT/package.json" "$TARGET/package.json"
 cat > "$TARGET/package.json" <<'JSON'
 {
   "name": "paperclip-plugin-webpush",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "type": "module",
   "private": true,
   "description": "Desktop and Android Web Push notifications for Paperclip board events.",

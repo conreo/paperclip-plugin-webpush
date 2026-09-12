@@ -3,7 +3,7 @@ import type { PluginEvent } from "@paperclipai/plugin-sdk";
 import {
   buildNotification,
   resolveVapidSubject,
-  selectRecipients,
+  planDelivery,
   shouldThrottle,
   type SubscriptionTarget,
 } from "../src/notifications.js";
@@ -86,47 +86,76 @@ describe("buildNotification", () => {
   });
 });
 
-describe("selectRecipients", () => {
-  it("targets only the responsible user when the event names one", () => {
-    const mine = subscription({ id: "mine", userId: "user-1" });
-    const someoneElse = subscription({ id: "theirs", userId: "user-2" });
-    const recipients = selectRecipients(
-      [mine, someoneElse],
-      event({ payload: { responsibleUserId: "user-1" } }),
-    );
+describe("planDelivery", () => {
+  it("targets the responsible user's devices even when they were registered in another company", () => {
+    // The device was registered while looking at company-2, but the user is the
+    // responsible party for an approval in company-1. Company-scoping delivery
+    // would drop this silently.
+    const registeredElsewhere = subscription({
+      id: "elsewhere",
+      userId: "user-1",
+      companyId: "company-2",
+    });
+    const recipients = planDelivery({
+      companySubscriptions: [],
+      responsibleSubscriptions: [registeredElsewhere],
+      event: event({ companyId: "company-1", payload: { responsibleUserId: "user-1" } }),
+    });
+    expect(recipients.map((entry) => entry.id)).toEqual(["elsewhere"]);
+  });
+
+  it("notifies only the named responsible user, not their colleagues", () => {
+    const recipients = planDelivery({
+      companySubscriptions: [subscription({ id: "theirs", userId: "user-2" })],
+      responsibleSubscriptions: [
+        subscription({ id: "mine", userId: "user-1" }),
+        subscription({ id: "theirs", userId: "user-2" }),
+      ],
+      event: event({ payload: { responsibleUserId: "user-1" } }),
+    });
     expect(recipients.map((entry) => entry.id)).toEqual(["mine"]);
   });
 
-  it("broadcasts within the company when no responsible user is set", () => {
-    const first = subscription({ id: "a", userId: "user-1" });
-    const second = subscription({ id: "b", userId: "user-2" });
-    const recipients = selectRecipients([first, second], event({ payload: {} }));
-    expect(recipients).toHaveLength(2);
+  it("keeps the unassigned fallback inside the event's own company", () => {
+    // An unassigned budget incident must not buzz another company's subscribers.
+    const recipients = planDelivery({
+      companySubscriptions: [
+        subscription({ id: "here", companyId: "company-1" }),
+        subscription({ id: "there", companyId: "company-2" }),
+      ],
+      event: event({ eventType: "budget.incident.opened", payload: {} }),
+    });
+    expect(recipients.map((entry) => entry.id)).toEqual(["here"]);
   });
 
-  it("stays silent when broadcasting is disabled and no user is named", () => {
-    const recipients = selectRecipients([subscription()], event({ payload: {} }), {
+  it("stays silent when unassigned and broadcasting is disabled", () => {
+    const recipients = planDelivery({
+      companySubscriptions: [subscription()],
+      event: event({ payload: {} }),
       broadcastWhenUnassigned: false,
     });
     expect(recipients).toEqual([]);
   });
 
-  it("respects company scope, the enabled flag, and per-device event choices", () => {
-    const otherCompany = subscription({ id: "other-company", companyId: "company-2" });
-    const disabled = subscription({ id: "disabled", enabled: false });
-    const optedOut = subscription({ id: "opted-out", eventTypes: ["budget.incident.opened"] });
-    const optedIn = subscription({ id: "opted-in", eventTypes: ["approval.created"] });
-
-    const recipients = selectRecipients(
-      [otherCompany, disabled, optedOut, optedIn],
-      event({ payload: { responsibleUserId: "user-1" } }),
-    );
-
+  it("honours the enabled flag and per-device event choices", () => {
+    const recipients = planDelivery({
+      companySubscriptions: [],
+      responsibleSubscriptions: [
+        subscription({ id: "disabled", userId: "user-1", enabled: false }),
+        subscription({ id: "opted-out", userId: "user-1", eventTypes: ["budget.incident.opened"] }),
+        subscription({ id: "opted-in", userId: "user-1", eventTypes: ["approval.created"] }),
+      ],
+      event: event({ payload: { responsibleUserId: "user-1" } }),
+    });
     expect(recipients.map((entry) => entry.id)).toEqual(["opted-in"]);
   });
 
   it("treats an empty event list as 'everything'", () => {
-    const recipients = selectRecipients([subscription()], event({ payload: { responsibleUserId: "user-1" } }));
+    const recipients = planDelivery({
+      companySubscriptions: [],
+      responsibleSubscriptions: [subscription({ userId: "user-1", eventTypes: [] })],
+      event: event({ payload: { responsibleUserId: "user-1" } }),
+    });
     expect(recipients).toHaveLength(1);
   });
 });

@@ -59,6 +59,45 @@ function urlBase64ToUint8Array(base64Url: string): Uint8Array<ArrayBuffer> {
   return bytes;
 }
 
+/**
+ * Wait until *this* registration has an active worker.
+ *
+ * `navigator.serviceWorker.ready` is the wrong tool here: it resolves as soon as
+ * any worker controls the page, and the host app's own root-scoped `/sw.js`
+ * already does. Calling `pushManager.subscribe()` at that point throws
+ * "Subscription failed - no active Service Worker" on a first-ever visit, when
+ * our freshly registered worker is still installing. On a browser that has
+ * visited before the worker is already active, which is exactly why the bug only
+ * shows up for new users.
+ */
+async function waitForActiveWorker(registration: ServiceWorkerRegistration): Promise<void> {
+  const active = async () => (await navigator.serviceWorker.getRegistration(registration.scope))?.active;
+  if (registration.active) return;
+
+  const worker = registration.installing ?? registration.waiting;
+  if (worker && worker.state !== "activated") {
+    await new Promise<void>((resolve) => {
+      const onStateChange = () => {
+        if (worker.state === "activated") {
+          worker.removeEventListener("statechange", onStateChange);
+          resolve();
+        }
+      };
+      worker.addEventListener("statechange", onStateChange);
+      // A worker that is already activated between the check above and the
+      // listener attach would otherwise hang this promise forever.
+      onStateChange();
+    });
+  }
+
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    if (await active()) return;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  throw new Error("The plugin's service worker did not activate in time. Reload the page and try again.");
+}
+
 function deviceLabel(): string {
   const agent = typeof navigator === "undefined" ? "" : navigator.userAgent;
   if (/Android/i.test(agent)) return "Android device";
@@ -143,7 +182,7 @@ export function SettingsPage(props: PluginSettingsPageProps) {
 
       const base = pluginUiBase();
       const registration = await navigator.serviceWorker.register(`${base}sw.js`, { scope: base });
-      await navigator.serviceWorker.ready;
+      await waitForActiveWorker(registration);
 
       const existing = await registration.pushManager.getSubscription();
       const subscription =
@@ -314,13 +353,17 @@ export function SettingsPage(props: PluginSettingsPageProps) {
         <strong style={{ fontSize: "0.9rem" }}>Registered devices ({devices.length})</strong>
         {devices.length === 0 ? (
           <div style={mutedStyle}>
-            No device is registered for {props.context.companyId ?? "this company"} yet.
+            No device is registered for your account yet. Devices are per person, not per
+            company: once registered, this browser receives alerts for anything you are
+            responsible for, in every company.
           </div>
         ) : null}
 
         {devices.map((device) => (
           <div
             key={device.endpoint}
+            data-testid="device-row"
+            data-device-current={device.endpoint === currentEndpoint ? "true" : "false"}
             style={{
               border: "1px solid currentColor",
               borderRadius: "0.5rem",

@@ -72,8 +72,16 @@ tables:
 **Targeting.** The activity log stamps events with `payload.responsibleUserId`.
 When it is present, only that user's devices are notified — waking the whole
 board for someone else's approval is the fastest way to get notifications muted.
-When it is absent, every subscriber in that company who opted into that event
-type is notified.
+That lookup is deliberately **not** company-scoped: a device registered while
+looking at company A still receives what its owner is responsible for in company
+B, because the device belongs to a person, not to a company. (On a multi-company
+instance the company-scoped alternative silently drops every other company's
+events, which reads as "notifications are broken".)
+
+When no responsible user is named, the fallback **is** company-scoped: every
+subscriber in that company who opted into that event type is notified, so an
+unassigned budget incident in one company does not buzz another company's
+subscribers.
 
 **Throttle.** At most 12 pushes per device per 5 minutes. Suppressed pushes are
 recorded with status `throttled`, so the settings page can explain the gap.
@@ -104,7 +112,9 @@ Two supported routes, depending on how the instance is deployed.
 **A. Copy into the running container** (no compose change, no rebuild). Build the
 portable artifact first — `scripts/bundle-deploy.sh` emits `dist/` +
 `migrations/` + a flat production `node_modules` (~4 MB), because `web-push` is
-resolved at runtime and cannot be bundled:
+resolved at runtime and cannot be bundled. It prints the absolute target path —
+use that path, and delete stale copies of it, because an old bundle installs
+cleanly and silently brings back fixed bugs:
 
 ```bash
 ./scripts/bundle-deploy.sh .cache/deploy-webpush
@@ -196,22 +206,36 @@ pnpm build         # esbuild -> dist/worker.js, dist/manifest.js, dist/ui/
 pnpm dev           # same, in watch mode
 ```
 
-Two Playwright checks run against a live instance (`SPIKE_BASE_URL`,
-`SPIKE_COMPANY_PREFIX`, `SPIKE_PLUGIN_ID` environment variables; they use a
-persistent Chrome profile because Chrome disables the Push API in incognito
-contexts):
+Four Playwright checks run against a live instance. They use persistent Chrome
+profiles (`SPIKE_PROFILE_DIR` overrides per-check) because Chrome disables the
+Push API in incognito contexts, and shared helpers in `scripts/lib/browser.mjs`:
 
 ```bash
-node scripts/e2e-local.mjs      # permission -> subscribe -> real test push -> notification shown
-node scripts/e2e-event.mjs      # creates a real issue, expects a notification, deletes the issue
-node scripts/e2e-approval.mjs   # creates an approval, expects "Approval needed", then rejects it
+node scripts/e2e-local.mjs          # permission -> subscribe -> real test push -> notification rendered
+node scripts/e2e-event.mjs          # creates a real issue, expects a notification, deletes the issue
+node scripts/e2e-approval.mjs       # creates an approval, expects "Approval needed", then rejects it
+SPIKE_OTHER_COMPANY_ID=<id> SPIKE_OTHER_PREFIX=<PFX> \
+  node scripts/e2e-cross-company.mjs  # event from a second company reaches a device registered in the first
 ```
 
-All three wait for the worker to report the device as registered before triggering
-anything. That matters: the browser can hold a `PushSubscription` while the
-`register-subscription` action is still in flight, and an event that arrives in
-that window legitimately has zero recipients and is skipped without a delivery
-row — which looks exactly like a delivery bug.
+Environmental overrides: `SPIKE_BASE_URL`, `SPIKE_COMPANY_PREFIX`, `SPIKE_COMPANY_ID`,
+`SPIKE_PLUGIN_ID`, `SPIKE_CHROME_PATH`, `SPIKE_PROFILE_DIR`.
+
+Three rules these checks follow, each learned from a false alarm that cost real
+debugging time:
+
+- **Assert an outcome, never an assumption.** They wait for the success notice and
+  for the device card marked `This browser` — a stale row from an earlier run
+  otherwise satisfies "a device is registered" instantly while this run's
+  registration silently failed.
+- **Delete the Chrome profile to test first use.** A registration persists in a
+  profile, so only a fresh profile exercises the path a new operator takes (this
+  is what surfaced the service-worker activation race that made the very first
+  *Enable* click fail).
+- **Expect the throttle.** Pushing more than 12 notifications to one device within
+  5 minutes suppresses further ones, recorded as `throttled`. Every check uses its
+  own profile for this reason, and `explainMiss()` reports a throttled device
+  rather than leaving it looking like a delivery failure.
 
 ## Licence
 

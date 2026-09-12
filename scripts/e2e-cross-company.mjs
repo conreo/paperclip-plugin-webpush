@@ -1,11 +1,17 @@
 /**
- * Event-driven check: a real board action becomes a notification.
+ * Cross-company delivery check.
  *
- * Creates an issue in the company the browser is registered under, expects the
- * notification, verifies the deep link, and deletes the issue so the instance is
- * left as it was found.
+ * Proves the targeting rule that matters on a multi-company instance: a device
+ * registered while looking at company A still receives what its owner is
+ * responsible for in company B. Delivery for a named responsible user is
+ * user-scoped, so the worker finds that device even though the event's company
+ * has no subscriptions of its own.
  *
- * Usage: node scripts/e2e-event.mjs
+ * Create a throwaway second company first if you do not have one:
+ *   paperclipai company create --payload-json '{"name":"Webpush Crosscompany Test"}'
+ *   SPIKE_OTHER_COMPANY_ID=<id> SPIKE_OTHER_PREFIX=<PREFIX> node scripts/e2e-cross-company.mjs
+ *
+ * Cleans up the issue it creates.
  */
 import { execFileSync } from "node:child_process";
 import {
@@ -19,7 +25,10 @@ import {
 
 const BASE = process.env.SPIKE_BASE_URL ?? "http://127.0.0.1:3100";
 const PREFIX = process.env.SPIKE_COMPANY_PREFIX ?? "ACME";
-const COMPANY_ID = process.env.SPIKE_COMPANY_ID ?? "acme-company-id";
+const OTHER_COMPANY_ID = process.env.SPIKE_OTHER_COMPANY_ID;
+const OTHER_PREFIX = process.env.SPIKE_OTHER_PREFIX ?? "WEB";
+
+if (!OTHER_COMPANY_ID) throw new Error("set SPIKE_OTHER_COMPANY_ID to a second company's id");
 
 const cli = (...args) =>
   execFileSync("paperclipai", [...args, "--api-base", BASE], {
@@ -27,12 +36,11 @@ const cli = (...args) =>
     env: { ...process.env, npm_config_cache: ".cache/npm" },
   });
 
-const { context, page } = await launchProfile("chrome-profile-event");
+const { context, page } = await launchProfile("chrome-profile-cross");
 await openSettingsPage(page);
 await enableNotifications(page);
+console.log(`device registered under company prefix ${PREFIX}`);
 
-// issue.created is off by default; enable it and wait for the write to land
-// before firing the event, otherwise the worker correctly finds nobody opted in.
 // Scope to this browser's own device card: the list may hold several
 // devices, and toggling the wrong one would leave this browser unsubscribed.
 const toggle = page
@@ -55,7 +63,7 @@ if (!(await toggle.isChecked())) {
 
 await readNotifications(page, { clear: true });
 
-const title = `[webpush e2e] event fan-out ${Date.now()}`;
+const title = `[webpush cross-company] ${Date.now()}`;
 let issueId = null;
 try {
   const created = JSON.parse(
@@ -63,37 +71,37 @@ try {
       "issue",
       "create",
       "--company-id",
-      COMPANY_ID,
+      OTHER_COMPANY_ID,
       "--title",
       title,
       "--description",
-      "Created by the web push plugin event check; deleted immediately after.",
+      "Cross-company delivery check for the web push plugin; deleted immediately after.",
       "--json",
     ),
   );
   issueId = created.id ?? created.issue?.id ?? null;
-  console.log(`created issue ${issueId}`);
+  console.log(`created issue in company ${OTHER_PREFIX} (${issueId})`);
 
   const notification = await waitForNotification(page, (item) => item.title.startsWith("New task"));
   if (!notification) {
     const miss = await explainMiss(page);
-    console.log(`NO NOTIFICATION FOR THE CREATED ISSUE — ${miss.hint}`);
+    console.log(`NO NOTIFICATION FOR THE OTHER COMPANY'S EVENT — ${miss.hint}`);
     console.log(miss.panel);
     process.exitCode = 1;
   } else {
-    console.log("=== notification from a real board event ===");
+    console.log("=== notification from the other company ===");
     console.log(JSON.stringify(notification, null, 2));
-    const expected = `/${PREFIX}/issues/${issueId}`;
+    const expected = `/${OTHER_PREFIX}/issues/${issueId}`;
     console.log(
       notification.url === expected
-        ? `deep link correct: ${notification.url}`
+        ? `deep link correct and points at the other company: ${notification.url}`
         : `deep link mismatch: got ${notification.url}, expected ${expected}`,
     );
   }
 } finally {
   if (issueId) {
     cli("issue", "delete", issueId, "--yes");
-    console.log(`deleted issue ${issueId}`);
+    console.log(`deleted issue ${issueId} (registered under ${PREFIX}, event from ${OTHER_PREFIX})`);
   }
   await context.close();
 }
