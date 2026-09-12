@@ -226,18 +226,19 @@ immediately and applies to browsers enabled from then on.
 
 **Notification wording** is configurable too, in the same section:
 
-- **Organization name** — taken from the organization automatically; the field exists
-  only to override what notifications call it.
 - **Show the organization name** — prefixes notification titles, so a notification is
-  attributable when you follow several organizations.
+  attributable when you follow several organizations. The name is read from the
+  organization; the override field appears beside the switch only when it is on, and
+  exists only for the case where the full company name is too long for a notification.
 - **Include the agent's name** — one switch for every notification type. It names the
   agent wherever an event is about one, so a failed run reads "<agent> run failed" and
   an approval an agent requested reads "<agent> requested a hire agent and is waiting
   for a decision." The agent's display name is resolved from the host, not stored in
   the event.
 - **Per notification** — a title and a body for each trigger. Empty fields keep the
-  built-in wording; the settings page shows that wording as placeholder text and
-  renders a live preview beside every field.
+  built-in wording, which the settings page shows as the field's placeholder text.
+  The available placeholders are documented once for the whole section, and an
+  "As sent" line appears under a trigger only once you have customised it.
 
 Placeholders are filled in when the notification is sent: `{{org}}` and `{{agent}}`
 everywhere, plus `{{identifier}}` and `{{title}}` for new tasks, `{{type}}` for

@@ -6,7 +6,6 @@ import {
 } from "@paperclipai/plugin-sdk/ui";
 import {
   SAMPLE_AGENT_NAME,
-  TEMPLATE_PLACEHOLDERS,
   previewDefaults,
   renderTemplate,
   sampleTemplateVars,
@@ -200,6 +199,60 @@ function Section({
   );
 }
 
+/** The host's General page uses a switch, not a checkbox; this mirrors it. */
+function Switch({
+  checked,
+  disabled,
+  onChange,
+  label,
+  testId,
+}: {
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (next: boolean) => void;
+  label: string;
+  testId?: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      data-testid={testId}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      style={{
+        position: "relative",
+        flexShrink: 0,
+        width: "2.25rem",
+        height: "1.25rem",
+        padding: 0,
+        borderRadius: "999px",
+        border: "1px solid var(--border)",
+        background: checked ? "var(--primary)" : "var(--input)",
+        cursor: disabled ? "default" : "pointer",
+        transition: "background 140ms ease",
+      }}
+    >
+      <span
+        style={{
+          position: "absolute",
+          top: "50%",
+          left: checked ? "calc(100% - 1.0625rem)" : "0.125rem",
+          transform: "translateY(-50%)",
+          width: "0.9375rem",
+          height: "0.9375rem",
+          borderRadius: "999px",
+          background: "var(--background)",
+          boxShadow: "0 1px 2px rgb(0 0 0 / 0.25)",
+          transition: "left 140ms ease",
+        }}
+      />
+    </button>
+  );
+}
+
 function ToggleRow({
   title,
   description,
@@ -221,15 +274,7 @@ function ToggleRow({
         <span style={fieldLabel}>{title}</span>
         <span style={fieldHint}>{description}</span>
       </span>
-      <input
-        type="checkbox"
-        checked={checked}
-        disabled={disabled}
-        onChange={(event) => onChange(event.target.checked)}
-        style={checkboxStyle}
-        data-testid={testId}
-        aria-label={title}
-      />
+      <Switch checked={checked} disabled={disabled} onChange={onChange} label={title} testId={testId} />
     </label>
   );
 }
@@ -677,52 +722,47 @@ export function SettingsPage(props: PluginSettingsPageProps) {
 
       <Section
         title="Notification content"
-        description="What each notification says. Leave a field empty to keep the built-in wording; placeholders are filled in when the notification is sent."
+        description="Leave a field empty to keep the wording shown in it. Placeholders work in any field: {{org}} {{agent}} {{identifier}} {{title}} {{type}} {{scope}} {{run}} — a placeholder this notification has no value for renders as nothing."
         testId="notification-content"
       >
-        <div style={{ display: "grid", gap: "0.5rem" }}>
-          <label style={{ display: "grid", gap: "0.25rem" }}>
-            <span style={fieldLabel}>Organization name in notifications</span>
-            <span style={fieldHint}>
-              Taken from the organization automatically
-              {config?.organizationName ? ` (${config.organizationName})` : ""} — set a value only to
-              override it in notifications.
-            </span>
-            <input
-              type="text"
-              value={organizationLabel ?? ""}
-              placeholder={config?.organizationName ?? "Your organization"}
-              onChange={(event) => setOrganizationLabel(event.target.value)}
-              style={inputStyle}
-              data-testid="org-label"
-            />
-          </label>
+        <ToggleRow
+          title="Show the organization name in notifications"
+          description="Prefixes notification titles. The name comes from the organization; the field below only overrides it."
+          checked={showLabel}
+          disabled={saving}
+          onChange={setIncludeOrganizationLabel}
+          testId="include-org-label"
+        />
 
-          <ToggleRow
-            title="Include the agent's name"
-            description="Names the agent in notifications that are about one, such as a failed run or an approval an agent requested."
-            checked={includeAgentName ?? true}
-            disabled={saving}
-            onChange={setIncludeAgentName}
-            testId="include-agent-name"
+        {showLabel ? (
+          <input
+            type="text"
+            value={organizationLabel ?? ""}
+            placeholder={config?.organizationName ?? "Your organization"}
+            onChange={(event) => setOrganizationLabel(event.target.value)}
+            style={{ ...inputStyle, marginLeft: "auto", maxWidth: "22rem" }}
+            aria-label="Override the organization name"
+            data-testid="org-label"
           />
+        ) : null}
 
-          <ToggleRow
-            title="Show the organization name"
-            description="Prefixes notification titles, so a notification is attributable when you follow more than one organization."
-            checked={showLabel}
-            disabled={saving}
-            onChange={setIncludeOrganizationLabel}
-            testId="include-org-label"
-          />
-        </div>
+        <ToggleRow
+          title="Include the agent's name"
+          description="Names the agent in notifications that are about one, such as a failed run or an approval an agent requested."
+          checked={includeAgentName ?? true}
+          disabled={saving}
+          onChange={setIncludeAgentName}
+          testId="include-agent-name"
+        />
 
         <p style={subHeadingStyle}>Per notification</p>
 
         {(config?.eventTypes ?? []).map((option) => {
           const defaults = previewDefaults(option.type as NotifiableEventType);
-          const placeholders = TEMPLATE_PLACEHOLDERS[option.type as NotifiableEventType] ?? [];
           const shown = preview(option.type);
+          const customised = Boolean(
+            templates?.[option.type]?.title?.trim() || templates?.[option.type]?.body?.trim(),
+          );
           return (
             <div key={option.type} style={cardStyle}>
               <span style={fieldLabel}>{option.label}</span>
@@ -746,10 +786,11 @@ export function SettingsPage(props: PluginSettingsPageProps) {
                   data-testid={`template-body-${option.type}`}
                 />
               </div>
-              <p style={fieldHint}>
-                Placeholders: {["org", "agent", ...placeholders].map((name) => `{{${name}}}`).join(" ")} · Preview:{" "}
-                <strong style={{ color: "var(--foreground)" }}>{shown.title}</strong> — {shown.body}
-              </p>
+              {customised ? (
+                <p style={fieldHint}>
+                  As sent: <strong style={{ color: "var(--foreground)" }}>{shown.title}</strong> — {shown.body}
+                </p>
+              ) : null}
             </div>
           );
         })}
