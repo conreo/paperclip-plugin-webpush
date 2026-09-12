@@ -182,6 +182,33 @@ how a notification channel gets muted.
 Preferences are per **device**, not per organization: one toggle set and one
 throttle, shared across the organizations you belong to.
 
+### Configuration
+
+Two settings are configurable, per organization, on the plugin's settings page:
+
+| Setting | What it does |
+| --- | --- |
+| **Triggers for newly enabled browsers** | Which notifications a browser starts with. Each device can still change its own set afterwards. |
+| **Notify about events that name nobody responsible** | When off, only events that name a responsible user notify anyone — unassigned events such as an ownerless budget incident notify nobody. |
+
+Both live in Paperclip's own company-scoped plugin configuration, which means
+**saving them requires an instance admin**. That is deliberate: the alternative,
+plugin-owned state, could be written by any board member through a plugin action.
+
+The settings page reads them back through the worker, so a saved change is visible
+immediately and applies to browsers enabled from then on.
+
+These are the only two, and the omissions are deliberate rather than unfinished:
+
+- **The throttle (12 per device per 5 minutes) is not configurable**, because it
+  counts a device across organizations. A per-organization value would be a lie,
+  and making it truly per-organization needs a company column on every delivery
+  row.
+- **The retention window (30 days) is not configurable**, because the prune job
+  that uses it runs without any company context.
+- **The VAPID keypair and its subject fallback are per instance**, not per
+  organization, so there is nowhere meaningful to configure them per company.
+
 ### Rate limiting
 
 At most **12 notifications per device per 5 minutes**. Anything beyond that is
@@ -335,7 +362,7 @@ pnpm build         # esbuild -> dist/worker.js, dist/manifest.js, dist/ui/
 pnpm dev           # same, in watch mode
 ```
 
-Four Playwright checks run against a live instance. They use persistent Chrome
+Five Playwright checks run against a live instance. They use persistent Chrome
 profiles (`SPIKE_PROFILE_DIR` overrides per check) because Chrome disables the Push
 API in incognito contexts, and shared helpers in `scripts/lib/browser.mjs`:
 
@@ -345,6 +372,7 @@ node scripts/e2e-event.mjs      # creates a real issue, expects a notification, 
 node scripts/e2e-approval.mjs   # creates an approval, expects "Approval needed", then rejects it
 SPIKE_OTHER_COMPANY_ID=<id> SPIKE_OTHER_PREFIX=<PFX> \
   node scripts/e2e-cross-company.mjs   # an event from a second company reaches a device registered in the first
+node scripts/e2e-config.mjs     # saves organization defaults, reloads, and proves a new browser uses them
 ```
 
 Overrides: `SPIKE_BASE_URL`, `SPIKE_COMPANY_PREFIX`, `SPIKE_COMPANY_ID`,

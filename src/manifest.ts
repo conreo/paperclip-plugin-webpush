@@ -1,4 +1,5 @@
 import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
+import { DEFAULT_EVENT_TYPES, NOTIFIABLE_EVENT_TYPES } from "./notifications.js";
 
 /**
  * Capabilities are declared in full, up front, on purpose: the host marks a
@@ -9,7 +10,7 @@ import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
 const manifest: PaperclipPluginManifestV1 = {
   id: "conreo.webpush",
   apiVersion: 1,
-  version: "0.5.0",
+  version: "0.6.0",
   displayName: "Web Push Notifications",
   description: "Desktop and Android push notifications for Paperclip board events.",
   author: "conreo",
@@ -34,6 +35,37 @@ const manifest: PaperclipPluginManifestV1 = {
   entrypoints: {
     worker: "./dist/worker.js",
     ui: "./dist/ui",
+  },
+  /**
+   * Company-scoped operator configuration.
+   *
+   * The host validates saved values against this schema, and its config API is
+   * instance-admin gated, which is what makes these settings safe to store there
+   * rather than in plugin state. The host's generated config form is not used:
+   * a plugin with a custom settings page does not get it rendered, so this
+   * plugin's own page edits these values.
+   */
+  instanceConfigSchema: {
+    type: "object",
+    properties: {
+      defaultTriggers: {
+        type: "array",
+        title: "Triggers for newly enabled browsers",
+        description:
+          "Which notifications a browser starts with when someone clicks Enable notifications. Each device can still change this afterwards.",
+        items: { type: "string", enum: [...NOTIFIABLE_EVENT_TYPES] },
+        default: [...DEFAULT_EVENT_TYPES],
+        uniqueItems: true,
+      },
+      notifyUnassignedEvents: {
+        type: "boolean",
+        title: "Notify about events that name nobody responsible",
+        description:
+          "When off, only events that name a responsible user notify anyone. Unassigned events, such as a budget incident with no owner, notify nobody.",
+        default: true,
+      },
+    },
+    additionalProperties: false,
   },
   database: {
     // The host derives the schema as `plugin_<namespaceSlug>_<sha256(manifest.id)[0:10]>`

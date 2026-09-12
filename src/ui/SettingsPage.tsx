@@ -9,6 +9,7 @@ type EventTypeOption = { type: string; label: string; defaultEnabled: boolean };
 type ClientConfig = {
   vapidPublicKey: string;
   eventTypes: EventTypeOption[];
+  notifyUnassignedEvents: boolean;
   throttle: { max: number; windowMinutes: number };
 };
 type Delivery = {
@@ -45,6 +46,16 @@ function pluginUiBase(): string {
     if (match) return match[1];
   }
   return fallback;
+}
+
+/**
+ * The plugin's record id, taken from the path this bundle was served from.
+ *
+ * The config API is addressed by record id, and the settings page has no other
+ * reliable way to learn it: `props.context` carries the company, not the plugin.
+ */
+function pluginRecordId(): string | null {
+  return /\/_plugins\/([^/]+)\//.exec(pluginUiBase())?.[1] ?? null;
 }
 
 /** `applicationServerKey` wants raw bytes; the VAPID key is base64url. */
@@ -137,6 +148,11 @@ export function SettingsPage(props: PluginSettingsPageProps) {
     typeof Notification === "undefined" ? "unsupported" : Notification.permission,
   );
   const [currentEndpoint, setCurrentEndpoint] = useState<string | null>(null);
+  const [defaultTriggers, setDefaultTriggers] = useState<string[] | null>(null);
+  const [notifyUnassigned, setNotifyUnassigned] = useState<boolean | null>(null);
+  const [configSaving, setConfigSaving] = useState(false);
+  const [configNotice, setConfigNotice] = useState<string | null>(null);
+  const [configError, setConfigError] = useState<string | null>(null);
 
   const secureContext = typeof window !== "undefined" && window.isSecureContext;
   const swSupported = typeof navigator !== "undefined" && "serviceWorker" in navigator;
@@ -146,6 +162,50 @@ export function SettingsPage(props: PluginSettingsPageProps) {
     const result = (await listDevices({})) as DevicesResult;
     setDevices(result.devices ?? []);
   }, [listDevices]);
+
+  useEffect(() => {
+    if (!config || defaultTriggers !== null) return;
+    setDefaultTriggers(config.eventTypes.filter((option) => option.defaultEnabled).map((option) => option.type));
+    setNotifyUnassigned(config.notifyUnassignedEvents);
+  }, [config, defaultTriggers]);
+
+  const saveOrganizationDefaults = useCallback(async () => {
+    const pluginId = pluginRecordId();
+    const companyId = props.context.companyId;
+    if (!pluginId || !companyId || defaultTriggers === null || notifyUnassigned === null) {
+      setConfigError("Could not determine the plugin or the active company.");
+      return;
+    }
+
+    setConfigSaving(true);
+    setConfigError(null);
+    setConfigNotice(null);
+    try {
+      // The whole object is replaced, so both keys are sent every time.
+      const response = await fetch(`/api/plugins/${encodeURIComponent(pluginId)}/config`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          companyId,
+          configJson: { defaultTriggers, notifyUnassignedEvents: notifyUnassigned },
+        }),
+      });
+      if (!response.ok) {
+        if (response.status === 403) {
+          throw new Error(
+            "Only an instance admin can change organization defaults. Individual devices keep their own checkboxes below.",
+          );
+        }
+        const detail = await response.text().catch(() => "");
+        throw new Error(`Save failed (HTTP ${response.status})${detail ? `: ${detail.slice(0, 160)}` : ""}`);
+      }
+      setConfigNotice("Saved. A browser enabled from now on starts with these triggers.");
+    } catch (cause) {
+      setConfigError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setConfigSaving(false);
+    }
+  }, [defaultTriggers, notifyUnassigned, props.context.companyId]);
 
   const readExistingSubscription = useCallback(async () => {
     if (!swSupported) return;
@@ -423,6 +483,65 @@ export function SettingsPage(props: PluginSettingsPageProps) {
             ) : null}
           </div>
         ))}
+      </section>
+
+      <section style={sectionStyle} data-testid="org-defaults">
+        <strong style={{ fontSize: "0.9rem" }}>Organization defaults</strong>
+        <div style={mutedStyle}>
+          Applies to the organization you are viewing now. These are the triggers a browser starts
+          with when someone clicks Enable notifications; each device can still change them
+          afterwards. Saving needs an instance admin.
+        </div>
+
+        <div style={{ display: "grid", gap: "0.25rem" }}>
+          {(config?.eventTypes ?? []).map((option) => {
+            const checked = (defaultTriggers ?? []).includes(option.type);
+            return (
+              <label key={option.type} style={{ fontSize: "0.8rem", display: "flex", gap: "0.4rem" }}>
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  disabled={configSaving || defaultTriggers === null}
+                  onChange={() =>
+                    setDefaultTriggers((current) => {
+                      const list = current ?? [];
+                      return list.includes(option.type)
+                        ? list.filter((entry) => entry !== option.type)
+                        : [...list, option.type];
+                    })
+                  }
+                />
+                <span>{option.label}</span>
+              </label>
+            );
+          })}
+        </div>
+
+        <label style={{ fontSize: "0.8rem", display: "flex", gap: "0.4rem" }}>
+          <input
+            type="checkbox"
+            data-testid="notify-unassigned"
+            checked={notifyUnassigned ?? true}
+            disabled={configSaving || notifyUnassigned === null}
+            onChange={(event) => setNotifyUnassigned(event.target.checked)}
+          />
+          <span>Also notify about events that name nobody responsible</span>
+        </label>
+
+        <div style={rowStyle}>
+          <button
+            type="button"
+            data-testid="save-org-defaults"
+            onClick={() => void saveOrganizationDefaults()}
+            disabled={configSaving || defaultTriggers === null || notifyUnassigned === null}
+          >
+            {configSaving ? "Saving…" : "Save organization defaults"}
+          </button>
+        </div>
+        {configNotice ? <div style={{ fontSize: "0.8rem" }}>{configNotice}</div> : null}
+        {configError ? (
+          <div style={{ fontSize: "0.8rem", color: "crimson" }}>{configError}</div>
+        ) : null}
       </section>
 
       <section style={{ ...sectionStyle, ...mutedStyle }}>

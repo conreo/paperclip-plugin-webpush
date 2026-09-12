@@ -5,6 +5,7 @@ import {
   activeUserMemberIds,
   NOTIFIABLE_EVENT_TYPES,
   buildNotification,
+  resolvePluginConfig,
   resolveVapidSubject,
   planDelivery,
   shouldThrottle,
@@ -215,6 +216,49 @@ describe("planDelivery", () => {
       event: event({ payload: { responsibleUserId: "user-1" } }),
     });
     expect(recipients).toHaveLength(1);
+  });
+});
+
+describe("resolvePluginConfig", () => {
+  it("falls back to the shipped defaults for missing or unusable input", () => {
+    for (const raw of [undefined, null, {}, "nonsense", 42, { defaultTriggers: "decision.created" }]) {
+      const config = resolvePluginConfig(raw);
+      expect(config.defaultTriggers).toEqual(DEFAULT_EVENT_TYPES);
+      expect(config.notifyUnassignedEvents).toBe(true);
+    }
+  });
+
+  it("honours a saved configuration", () => {
+    const config = resolvePluginConfig({
+      defaultTriggers: ["decision.created", "approval.created"],
+      notifyUnassignedEvents: false,
+    });
+    expect(config.defaultTriggers).toEqual(["decision.created", "approval.created"]);
+    expect(config.notifyUnassignedEvents).toBe(false);
+  });
+
+  it("treats an explicitly empty trigger list as a real choice", () => {
+    // "Start muted, opt in per trigger" is a legitimate configuration. Only a
+    // missing or unusable value may fall back to the defaults.
+    expect(resolvePluginConfig({ defaultTriggers: [] }).defaultTriggers).toEqual([]);
+  });
+
+  it("drops trigger names it cannot deliver on", () => {
+    const config = resolvePluginConfig({
+      defaultTriggers: ["decision.created", "not.a.real.event", "issue.created", 7],
+    });
+    expect(config.defaultTriggers).toEqual(["decision.created", "issue.created"]);
+  });
+
+  it("keeps a partial configuration usable", () => {
+    expect(resolvePluginConfig({ defaultTriggers: ["decision.created"] }).notifyUnassignedEvents).toBe(
+      true,
+    );
+    expect(resolvePluginConfig({ notifyUnassignedEvents: false }).defaultTriggers).toEqual(
+      DEFAULT_EVENT_TYPES,
+    );
+    // A non-boolean is not a choice, so the safe default stands.
+    expect(resolvePluginConfig({ notifyUnassignedEvents: "false" }).notifyUnassignedEvents).toBe(true);
   });
 });
 

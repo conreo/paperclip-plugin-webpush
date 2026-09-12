@@ -8,6 +8,7 @@ import {
   buildNotification,
   isNotifiableEventType,
   planDelivery,
+  resolvePluginConfig,
   resolveVapidSubject,
   responsibleUserIdOf,
   shouldThrottle,
@@ -71,6 +72,23 @@ async function companyPrefix(ctx: PluginContext, companyId: string): Promise<str
 }
 
 /**
+ * The company's operator configuration, resolved with working defaults.
+ *
+ * Read fresh on every use rather than cached: these events are low-frequency, and
+ * a cached value would delay an operator's change with no visible reason. A
+ * failure to read is not fatal — the defaults are what the plugin ships with.
+ */
+async function companyConfig(ctx: PluginContext, companyId: string | null) {
+  if (!companyId) return resolvePluginConfig(null);
+  try {
+    return resolvePluginConfig(await ctx.config.get(companyId));
+  } catch (error) {
+    ctx.logger.warn(`could not read plugin config for ${companyId}: ${String(error)}`);
+    return resolvePluginConfig(null);
+  }
+}
+
+/**
  * Active human members of a company.
  *
  * Returns null when the host cannot answer, which is the signal to fall back to
@@ -129,12 +147,11 @@ function normalizeOrigin(value: unknown): string | null {
   }
 }
 
-function sanitizeEventTypes(value: unknown): string[] {
-  if (!Array.isArray(value)) return [...DEFAULT_EVENT_TYPES];
-  const requested = value.filter(
+function sanitizeEventTypes(value: unknown, fallback: readonly string[]): string[] {
+  if (!Array.isArray(value)) return [...fallback];
+  return value.filter(
     (entry): entry is string => typeof entry === "string" && isNotifiableEventType(entry),
   );
-  return requested;
 }
 
 function describeUserAgent(value: unknown): string | null {
@@ -165,6 +182,7 @@ async function fanOut(ctx: PluginContext, db: PluginDb, event: PluginEvent): Pro
   const notification = buildNotification(event, await companyPrefix(ctx, event.companyId));
   if (!notification) return;
 
+  const config = await companyConfig(ctx, event.companyId);
   const responsibleUserId = responsibleUserIdOf(event);
 
   // An event that names a responsible user goes to that person's devices in any
@@ -172,7 +190,7 @@ async function fanOut(ctx: PluginContext, db: PluginDb, event: PluginEvent): Pro
   // not to the devices that happened to be registered from that company, which is
   // an accident of where someone last clicked Enable rather than a preference.
   let broadcastSubscriptions: SubscriptionTarget[] = [];
-  if (!responsibleUserId) {
+  if (!responsibleUserId && config.notifyUnassignedEvents) {
     const memberUserIds = await companyMemberUserIds(ctx, event.companyId);
     broadcastSubscriptions =
       memberUserIds === null
@@ -184,7 +202,12 @@ async function fanOut(ctx: PluginContext, db: PluginDb, event: PluginEvent): Pro
     ? await listEnabledForUser(db, responsibleUserId)
     : [];
 
-  const recipients = planDelivery({ responsibleSubscriptions, broadcastSubscriptions, event });
+  const recipients = planDelivery({
+    responsibleSubscriptions,
+    broadcastSubscriptions,
+    event,
+    broadcastWhenUnassigned: config.notifyUnassignedEvents,
+  });
   // No recipients is a normal outcome (nobody opted in, or nobody is responsible
   // for this event yet) — it is not an error, so it records no delivery row.
   if (recipients.length === 0) return;
@@ -276,15 +299,22 @@ const plugin = definePlugin({
     }
 
     /** Public client configuration: no secrets, safe for any board user. */
-    ctx.data.register("client-config", async () => {
-      const vapid = await ensureVapidKeypair(db);
+    ctx.data.register("client-config", async (params) => {
+      const companyId = typeof params.companyId === "string" ? params.companyId : null;
+      const [vapid, config] = await Promise.all([
+        ensureVapidKeypair(db),
+        companyConfig(ctx, companyId),
+      ]);
       return {
         vapidPublicKey: vapid.publicKey,
+        // The checkbox set is the company's configured default, so a saved change
+        // is visible immediately and a new device starts with the intended set.
         eventTypes: NOTIFIABLE_EVENT_TYPES.map((type) => ({
           type,
           label: EVENT_TYPE_LABELS[type],
-          defaultEnabled: DEFAULT_EVENT_TYPES.includes(type),
+          defaultEnabled: config.defaultTriggers.includes(type),
         })),
+        notifyUnassignedEvents: config.notifyUnassignedEvents,
         throttle: THROTTLE,
       };
     });
@@ -305,13 +335,15 @@ const plugin = definePlugin({
       const subscription = parseSubscriptionInput(params.subscription);
       if (!subscription) throw new Error("A valid push subscription is required.");
 
+      const config = await companyConfig(ctx, companyId);
+
       await upsertSubscription(db, {
         userId,
         companyId,
         endpoint: subscription.endpoint,
         p256dh: subscription.p256dh,
         auth: subscription.auth,
-        eventTypes: sanitizeEventTypes(params.eventTypes),
+        eventTypes: sanitizeEventTypes(params.eventTypes, config.defaultTriggers),
         label: typeof params.label === "string" ? params.label.slice(0, 100) : null,
         userAgent: describeUserAgent(params.userAgent),
         origin: normalizeOrigin(params.origin),
@@ -330,7 +362,12 @@ const plugin = definePlugin({
       await updateSubscriptionPreferences(db, {
         userId,
         endpoint: params.endpoint,
-        eventTypes: Array.isArray(params.eventTypes) ? sanitizeEventTypes(params.eventTypes) : undefined,
+        // A device may opt into any trigger, not only the organization defaults,
+        // so the fallback here is the full set — it is only reached if the caller
+        // sent something that is not a list at all.
+        eventTypes: Array.isArray(params.eventTypes)
+          ? sanitizeEventTypes(params.eventTypes, NOTIFIABLE_EVENT_TYPES)
+          : undefined,
         enabled: typeof params.enabled === "boolean" ? params.enabled : undefined,
       });
 

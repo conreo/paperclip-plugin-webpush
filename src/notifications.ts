@@ -204,6 +204,46 @@ export type SubscriptionTarget = {
   origin: string | null;
 };
 
+/**
+ * Operator configuration, resolved from whatever the host stored.
+ *
+ * Configuration is company-scoped in Paperclip, so every knob here is one that
+ * means something per organization. Instance-wide behaviour (the throttle, the
+ * prune window, the VAPID subject fallback) is deliberately not configurable:
+ * a per-company value for those would be a lie, because the throttle counts a
+ * device across companies and the prune job has no company context at all.
+ *
+ * Everything is optional. An empty config, a partial config, or a config holding
+ * nonsense must all resolve to working defaults rather than failing at delivery
+ * time.
+ */
+export type ResolvedPluginConfig = {
+  /** Triggers a newly enabled browser starts with. */
+  defaultTriggers: NotifiableEventType[];
+  /** Whether events that name nobody responsible notify the company's members. */
+  notifyUnassignedEvents: boolean;
+};
+
+export function resolvePluginConfig(raw: unknown): ResolvedPluginConfig {
+  const config = asRecord(raw);
+
+  const requested = config.defaultTriggers;
+  const defaultTriggers = Array.isArray(requested)
+    ? requested.filter(
+        (entry): entry is NotifiableEventType =>
+          typeof entry === "string" && isNotifiableEventType(entry),
+      )
+    : [...DEFAULT_EVENT_TYPES];
+
+  return {
+    // An explicitly empty list is a real choice ("start muted, opt in per
+    // trigger"); only a missing or unusable value falls back to the defaults.
+    defaultTriggers: Array.isArray(requested) ? defaultTriggers : [...DEFAULT_EVENT_TYPES],
+    notifyUnassignedEvents:
+      typeof config.notifyUnassignedEvents === "boolean" ? config.notifyUnassignedEvents : true,
+  };
+}
+
 /** The user the activity log holds responsible for an event, if it named one. */
 export function responsibleUserIdOf(event: PluginEvent): string | null {
   const value = asRecord(event.payload).responsibleUserId;
