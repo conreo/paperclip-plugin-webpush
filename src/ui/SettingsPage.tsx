@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   usePluginAction,
   usePluginData,
@@ -151,6 +151,54 @@ function EditorField({ label, children }: { label: string; children: React.React
   );
 }
 
+/**
+ * The `?` beside a label, as on the host's own settings rows.
+ *
+ * A native `title` was the cheaper option and the wrong one: it cannot be reached
+ * by touch at all, and on a tablet a long press pops it while the finger is still
+ * on the row. This is the same mark the host puts next to "Require board approval
+ * for new hires" — 12px at half opacity — with a bubble it opens on click.
+ */
+function HelpTip({ text, label }: { text: string; label: string }) {
+  const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = () => setOpen(false);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <span className="pcp-help-wrap" ref={wrap} onMouseDown={(event) => event.stopPropagation()}>
+      <button
+        type="button"
+        className="pcp-help"
+        data-slot="icon-button"
+        aria-expanded={open}
+        aria-label={`What is ${label}?`}
+        data-testid={`help-${label}`}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="10" />
+          <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+          <path d="M12 17h.01" />
+        </svg>
+      </button>
+      {open ? <span className="pcp-help-bubble" role="tooltip">{text}</span> : null}
+    </span>
+  );
+}
+
 /** The host's ToggleSwitch: a switch, not a checkbox. */
 function Switch({
   checked,
@@ -175,6 +223,10 @@ function Switch({
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className="pcp-switch"
+      // The host's coarse-pointer rule floors every button at 44px; its own
+      // ToggleSwitch is exempt through this slot, and without it a tablet draws a
+      // 44px capsule with a 16px thumb in it.
+      data-slot="toggle"
     >
       <span className="pcp-switch-thumb" />
     </button>
@@ -198,8 +250,11 @@ function ToggleField({
   testId?: string;
 }) {
   return (
-    <div className="pcp-toggle-row" title={hint}>
-      <span className="pcp-toggle-label">{label}</span>
+    <div className="pcp-toggle-row">
+      <span className="pcp-toggle-label">
+        {label}
+        {hint ? <HelpTip text={hint} label={label} /> : null}
+      </span>
       <Switch checked={checked} disabled={disabled} onChange={onChange} label={label} testId={testId} />
     </div>
   );
@@ -499,20 +554,28 @@ export function SettingsPage(props: PluginSettingsPageProps) {
    */
   const preview = useMemo(() => {
     return (eventType: string) => {
-      const defaults = previewDefaults(eventType as NotifiableEventType, { agentName: SAMPLE_AGENT_NAME });
+      const defaults = previewDefaults(
+        eventType as NotifiableEventType,
+        { agentName: SAMPLE_AGENT_NAME },
+        organizationToken,
+      );
       const vars = sampleTemplateVars(eventType as NotifiableEventType, organizationToken);
       const template = templates?.[eventType];
       const customTitle = template?.title?.trim();
       const customBody = template?.body?.trim();
       return {
-        title: customTitle
-          ? renderTemplate(customTitle, vars)
-          : `${organizationToken} · ${defaults.title}`,
+        // The built-in line already names the organization — "Approval: ACME | ..." —
+        // so it is used as it comes rather than prefixed again.
+        title: customTitle ? renderTemplate(customTitle, vars) : defaults.title,
         body: customBody ? renderTemplate(customBody, vars) : defaults.body,
         customised: Boolean(customTitle || customBody),
       };
     };
   }, [organizationToken, templates]);
+
+  // One example on the page, showing whichever trigger is being edited: seven
+  // previews of seven messages was the repetition this section is meant to avoid.
+  const exampleType = openTrigger ?? eventTypes[0]?.type ?? null;
 
   const setTemplateField = (eventType: string, field: "title" | "body", value: string) => {
     setTemplates((current) => ({
@@ -655,15 +718,44 @@ export function SettingsPage(props: PluginSettingsPageProps) {
 
       <Section label="Notification content" testId="notification-content">
         <p className="pcp-hint">
-          Each trigger below shows what it will send. Open one to write your own wording: the text is
-          composed from words and objects, and an object is inserted from a list — never typed — so a
-          notification cannot arrive with a misspelled object in it. An empty field keeps the built-in
-          wording.
+          One example of what a notification looks like, and a row per trigger. Open a trigger to write
+          your own wording: the text is composed from words and objects, and an object is inserted from a
+          list — never typed — so a notification cannot arrive with a misspelled object in it. An empty
+          field keeps the built-in wording.
         </p>
 
+        {exampleType ? (
+          <div>
+            <span className="pcp-field-label">
+              Example{" "}
+              {openTrigger
+                ? `— ${eventTypes.find((option) => option.type === openTrigger)?.label ?? ""}`
+                : "— the default wording"}
+            </span>
+            <div className="pcp-notification" data-testid="example-notification">
+              <div className="pcp-notification-head">
+                <span className="pcp-notification-icon">
+                  <BellIcon />
+                </span>
+                <span className="pcp-notification-app">Paperclip</span>
+                <span className="pcp-notification-time">now</span>
+              </div>
+              <div className="pcp-notification-title" data-testid={`preview-title-${exampleType}`}>
+                {preview(exampleType).title}
+              </div>
+              <div className="pcp-notification-body" data-testid={`preview-body-${exampleType}`}>
+                {preview(exampleType).body}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         {eventTypes.map((option) => {
-          const defaults = previewDefaults(option.type as NotifiableEventType, { agentName: SAMPLE_AGENT_NAME });
-          const shown = preview(option.type);
+          const defaults = previewDefaults(
+            option.type as NotifiableEventType,
+            { agentName: SAMPLE_AGENT_NAME },
+            organizationToken,
+          );
           const template = templates?.[option.type];
           const open = openTrigger === option.type;
           const suspicious = [template?.title, template?.body].some(
@@ -672,47 +764,49 @@ export function SettingsPage(props: PluginSettingsPageProps) {
 
           return (
             <div key={option.type} className="pcp-trigger" data-testid={`trigger-${option.type}`}>
-              {/*
-                The row is the control: the trigger's name, what it sends, and whether
-                it has been customised. Everything else waits behind it, so the section
-                can be read in one screen instead of scrolled through.
-              */}
-              <button
-                type="button"
-                className="pcp-trigger-row"
-                aria-expanded={open}
-                aria-controls={`trigger-body-${option.type}`}
-                onClick={() => setOpenTrigger(open ? null : option.type)}
-                data-testid={`open-${option.type}`}
-                title={EVENT_TYPE_DESCRIPTIONS[option.type as NotifiableEventType]}
-              >
-                <span className="pcp-trigger-name">{option.label}</span>
-                {/*
-                  The body, not the title: the title restates the trigger ("Approval
-                  needed" under "Approval") and the body carries the part that
-                  differs. The title takes over only when there is no body to show.
-                */}
-                <span className="pcp-trigger-summary" data-testid={`summary-${option.type}`}>
-                  {acronym ? <span className="pcp-acronym">{acronym}</span> : null}
-                  <span>{shown.body || shown.title}</span>
+              {/* The host's own row shape: the label and its hint on the left, one control on the right. */}
+              <div className="pcp-toggle-row">
+                <span className="pcp-toggle-label">
+                  {option.label}
+                  <HelpTip
+                    text={EVENT_TYPE_DESCRIPTIONS[option.type as NotifiableEventType]}
+                    label={`the ${option.label} notification`}
+                  />
+                  {preview(option.type).customised ? (
+                    <span
+                      className="pcp-dot"
+                      role="img"
+                      aria-label="Customised"
+                      title="This trigger has its own wording"
+                      data-testid={`custom-${option.type}`}
+                    />
+                  ) : null}
                 </span>
-                {shown.customised ? (
-                  <span className="pcp-dot" title="Customised" aria-label="Customised" role="img" />
-                ) : null}
-                <svg
-                  className="pcp-chevron"
-                  data-open={open ? "true" : "false"}
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden="true"
+                <button
+                  type="button"
+                  className="pcp-icon-btn"
+                  data-slot="icon-button"
+                  aria-expanded={open}
+                  aria-controls={`trigger-body-${option.type}`}
+                  aria-label={`Edit the ${option.label} notification`}
+                  onClick={() => setOpenTrigger(open ? null : option.type)}
+                  data-testid={`open-${option.type}`}
                 >
-                  <path d="m6 9 6 6 6-6" />
-                </svg>
-              </button>
+                  <svg
+                    className="pcp-chevron"
+                    data-open={open ? "true" : "false"}
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="m6 9 6 6 6-6" />
+                  </svg>
+                </button>
+              </div>
 
               {open ? (
                 <div className="pcp-trigger-body" id={`trigger-body-${option.type}`}>
@@ -732,7 +826,7 @@ export function SettingsPage(props: PluginSettingsPageProps) {
                     />
                   </EditorField>
 
-                  <EditorField label="Body">
+                  <EditorField label="Body (optional)">
                     <TemplateEditor
                       value={template?.body ?? ""}
                       objects={templateObjectsFor(option.type as NotifiableEventType)}
@@ -743,25 +837,6 @@ export function SettingsPage(props: PluginSettingsPageProps) {
                     />
                   </EditorField>
 
-                  <div>
-                    <span className="pcp-field-label">What gets sent</span>
-                    <div className="pcp-notification" data-testid={`preview-${option.type}`}>
-                      <div className="pcp-notification-head">
-                        <span className="pcp-notification-icon">
-                          <BellIcon />
-                        </span>
-                        <span className="pcp-notification-app">Paperclip</span>
-                        <span className="pcp-notification-time">now</span>
-                      </div>
-                      <div className="pcp-notification-title" data-testid={`preview-title-${option.type}`}>
-                        {shown.title}
-                      </div>
-                      <div className="pcp-notification-body" data-testid={`preview-body-${option.type}`}>
-                        {shown.body}
-                      </div>
-                    </div>
-                  </div>
-
                   {suspicious ? (
                     <p className="pcp-hint">
                       A {"{{name}}"} that is not in the insert list is not an object, so it arrives as
@@ -769,7 +844,7 @@ export function SettingsPage(props: PluginSettingsPageProps) {
                     </p>
                   ) : null}
 
-                  {shown.customised ? (
+                  {preview(option.type).customised ? (
                     <div className="pcp-actions">
                       <button
                         type="button"
@@ -823,6 +898,7 @@ export function SettingsPage(props: PluginSettingsPageProps) {
             <ToggleField
               key={option.type}
               label={option.label}
+              hint={EVENT_TYPE_DESCRIPTIONS[option.type as NotifiableEventType]}
               checked={(defaultTriggers ?? []).includes(option.type)}
               disabled={saving || defaultTriggers === null}
               onChange={() => toggleDefaultTrigger(option.type)}

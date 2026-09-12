@@ -123,6 +123,7 @@ function link(companyPrefix: string | null, path: string): string {
 export function previewDefaults(
   eventType: NotifiableEventType,
   context: NotificationEventContext = {},
+  organization: string | null = null,
 ): { title: string; body: string } {
   const sample = {
     eventId: "preview",
@@ -134,14 +135,16 @@ export function previewDefaults(
     payload: {},
   } as unknown as PluginEvent;
   const draft = draftFor(sample, "COMPANY", eventType, context);
-  return { title: draft.title, body: draft.body };
+  return { title: notificationTitle(eventType, organization, draft.detail), body: "" };
 }
 
 /**
  * Turn one domain event into a notification, or `null` when the event carries
  * nothing an operator should be interrupted for.
  *
- * Bodies stay generic on purpose: the event payload is the redacted activity
+ * The built-in message is one line, because a push shows one line before it is
+ * expanded. Bodies are empty unless an operator writes one. The specifics stay
+ * generic where the event does not carry them: the payload is the redacted activity
  * detail, and issue titles or agent prose are not guaranteed to be present (and
  * would blow the payload budget when they are).
  */
@@ -381,8 +384,8 @@ function payloadField(payload: Record<string, unknown>, name: string): unknown {
 }
 
 type Draft = {
-  title: string;
-  body: string;
+  /** The specifics that follow the label and the organization. */
+  detail: string;
   url: string;
   /** `null` marks a valid placeholder this event has no value for. */
   vars: Record<string, string | null>;
@@ -396,26 +399,26 @@ function draftFor(
   context: NotificationEventContext = {},
 ): Draft {
   const payload = asRecord(event.payload);
-  const details = asRecord(payload.details);
   const agentName = context.agentName?.trim() || null;
 
+  // Each case returns the *specifics* only: the label and the organization are added
+  // by `notificationTitle`, which is what makes every built-in notification read
+  // "<what happened>: <ORG> | <the specifics>" without each case repeating the
+  // scaffolding. The specifics also never restate the label — "Run failed" is
+  // followed by who and which run, not by "run failed" again.
   switch (eventType) {
     case "decision.created":
       // The payload carries the origin (issue, agent, responsible user) but no
-      // decision title, so the body stays generic and the link goes to the desk
+      // decision title, so the line stays generic and the link goes to the desk
       // where the choice is actually made.
       return {
-        title: "Decision needed",
-        body: agentName
-          ? `${agentName} needs a decision from you.`
-          : "A decision is waiting for your choice.",
+        detail: agentName ? `${agentName} needs your choice` : "Waiting for your choice",
         url: link(companyPrefix, "/decisions"),
         vars: { agent: agentName },
       };
     case "decision.expired":
       return {
-        title: "Decision overdue",
-        body: "A decision passed its decide-by date.",
+        detail: "Passed its decide-by date",
         url: link(companyPrefix, "/decisions"),
         vars: {},
       };
@@ -424,10 +427,9 @@ function draftFor(
       const readable = typeof approvalType === "string" ? approvalType.replaceAll("_", " ") : "request";
 
       return {
-        title: "Approval needed",
-        body: agentName
-          ? `${agentName} requested a ${readable} and is waiting for a decision.`
-          : `A ${readable} is waiting for a decision.`,
+        // The type is the useful part when nobody is named: a hire request and a
+        // spend request want different reactions.
+        detail: agentName ? `${agentName} waiting for a decision` : `A ${readable} is waiting`,
         url: link(companyPrefix, `/approvals/${event.entityId ?? ""}`),
         vars: { type: readable, agent: agentName },
       };
@@ -436,8 +438,7 @@ function draftFor(
       const identifierValue = payloadField(payload, "identifier");
       const identifier = typeof identifierValue === "string" ? identifierValue : null;
       return {
-        title: "Task assigned",
-        body: identifier ? `${identifier} is waiting on you.` : "A task is waiting on you.",
+        detail: identifier ? `${identifier} waiting on you` : "A task is waiting on you",
         url: link(companyPrefix, `/issues/${event.entityId ?? ""}`),
         vars: { identifier, agent: null },
       };
@@ -446,10 +447,7 @@ function draftFor(
       const runRef = shortId(payload.runId);
       const issueId = (payload.issueId as string | undefined) ?? event.entityId ?? "";
       return {
-        // The agent's name is the useful part of this notification, so it leads
-        // the title whenever the caller resolved one.
-        title: agentName ? `${agentName} run failed` : "Agent run failed",
-        body: runRef ? `Run ${runRef} failed.` : "An agent run failed.",
+        detail: [agentName, runRef ? `run ${runRef}` : null].filter(Boolean).join(" · ") || "A run failed",
         url: link(companyPrefix, `/issues/${issueId}`),
         vars: { run: runRef, identifier: null, agent: agentName },
       };
@@ -459,8 +457,7 @@ function draftFor(
       const scope = typeof scopeValue === "string" ? scopeValue : "budget";
       const readable = scope.replaceAll("_", " ");
       return {
-        title: "Budget threshold crossed",
-        body: `A ${readable} incident was opened.`,
+        detail: readable === "budget" ? "Threshold crossed" : `${readable} threshold crossed`,
         url: link(companyPrefix, "/activity/budgets"),
         vars: { scope: readable, agent: null },
       };
@@ -471,13 +468,29 @@ function draftFor(
       const titleValue = payloadField(payload, "title");
       const issueTitle = typeof titleValue === "string" ? titleValue : null;
       return {
-        title: identifier ? `New task ${identifier}` : "New task",
-        body: issueTitle ?? "A task was created.",
+        detail: [identifier, issueTitle].filter(Boolean).join(" · ") || "A task was created",
         url: link(companyPrefix, `/issues/${event.entityId ?? ""}`),
         vars: { identifier, title: issueTitle, agent: null },
       };
     }
   }
+}
+
+/**
+ * The built-in title: what happened, whose organization, and the specifics.
+ *
+ * One line, because a lock screen shows one line and that is what the notification
+ * carries: `Approval: SAK | CodexCoder waiting for a decision`. The organization
+ * segment is left out entirely on an instance with no company name, rather than
+ * leaving an empty slot with a separator around it.
+ */
+export function notificationTitle(
+  eventType: NotifiableEventType,
+  organization: string | null,
+  detail: string,
+): string {
+  const head = organization ? `${EVENT_TYPE_LABELS[eventType]}: ${organization}` : EVENT_TYPE_LABELS[eventType];
+  return detail ? `${head} | ${detail}` : head;
 }
 
 /**
@@ -511,15 +524,14 @@ export function buildNotification(
     org: presentation?.organizationLabel ?? null,
   };
 
-  let title = template?.title ? renderTemplate(template.title, vars) : draft.title;
-  const body = template?.body ? renderTemplate(template.body, vars) : draft.body;
-
-  // A custom title is sent exactly as written — the editor shows what will
-  // arrive — so the organization is prefixed only to the built-in wording.
-  // An operator who wants the name places the object themselves.
-  if (!template?.title && presentation?.organizationLabel) {
-    title = `${presentation.organizationLabel} · ${title}`;
-  }
+  // A custom title is sent exactly as written — the editor's preview shows what will
+  // arrive — and the built-in one gets the organization from its own format rather
+  // than from a prefix added afterwards, so there is no rule about when a prefix
+  // applies and no way to end up with the name twice.
+  const title = template?.title
+    ? renderTemplate(template.title, vars)
+    : notificationTitle(eventType, presentation?.organizationLabel ?? null, draft.detail);
+  const body = template?.body ? renderTemplate(template.body, vars) : "";
 
   return { eventType, eventId: event.eventId, tag: eventType, title, body, url: draft.url };
 }

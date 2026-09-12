@@ -94,6 +94,7 @@ export function FullscreenButton() {
     <button
       type="button"
       data-testid="fullscreen-toggle"
+      data-slot="icon-button"
       aria-label={label}
       title={label}
       aria-pressed={state.active}

@@ -12,6 +12,7 @@ import {
   buildNotification,
   hasUnknownPlaceholder,
   normalizeTemplate,
+  notificationTitle,
   parseTemplate,
   previewDefaults,
   renderTemplate,
@@ -91,7 +92,7 @@ describe("decision notifications", () => {
       "ACME",
     );
     expect(notification).toMatchObject({
-      title: "Decision needed",
+      title: "Decision | Waiting for your choice",
       url: "/ACME/decisions",
       tag: "decision.created",
       eventId: "evt-1",
@@ -103,7 +104,7 @@ describe("decision notifications", () => {
       event({ eventType: "decision.expired", entityId: "decision-2", entityType: "decision" }),
       "ACME",
     );
-    expect(notification?.title).toBe("Decision overdue");
+    expect(notification?.title).toBe("Decision overdue | Passed its decide-by date");
     expect(notification?.url).toBe("/ACME/decisions");
   });
 
@@ -119,7 +120,7 @@ describe("buildNotification", () => {
   it("deep-links approvals under the company route prefix", () => {
     const notification = buildNotification(event({ entityId: "appr-9" }), "ACME");
     expect(notification).toMatchObject({
-      title: "Approval needed",
+      title: "Approval | A request is waiting",
       url: "/ACME/approvals/appr-9",
       tag: "approval.created",
       eventId: "evt-1",
@@ -131,7 +132,7 @@ describe("buildNotification", () => {
     expect(notification?.url).toBe("/approvals/appr-9");
   });
 
-  it("prefers the issue id on a failed run", () => {
+  it("carries the run id and the issue link on a failed run", () => {
     const notification = buildNotification(
       event({
         eventType: "agent.run.failed",
@@ -142,7 +143,7 @@ describe("buildNotification", () => {
       "ACME",
     );
     expect(notification?.url).toBe("/ACME/issues/issue-7");
-    expect(notification?.body).toContain("12345678");
+    expect(notification?.title).toContain("12345678");
   });
 
   it("includes the issue title for a created task", () => {
@@ -154,8 +155,8 @@ describe("buildNotification", () => {
       }),
       "ACME",
     );
-    expect(notification?.title).toBe("New task ACME-42");
-    expect(notification?.body).toBe("Ship the thing");
+    expect(notification?.title).toBe("New task | ACME-42 · Ship the thing");
+    expect(notification?.body).toBe("");
   });
 
   it("ignores event types it does not notify on", () => {
@@ -369,7 +370,7 @@ describe("buildNotification with configured text", () => {
 
   it("prefixes the organization name", () => {
     const notification = buildNotification(event(), "ACME", presentation());
-    expect(notification?.title).toBe("Acme · Approval needed");
+    expect(notification?.title).toBe("Approval: Acme | A request is waiting");
   });
 
   it("uses an operator title and body, with placeholders filled", () => {
@@ -395,8 +396,8 @@ describe("buildNotification with configured text", () => {
 
   it("falls back to the built-in wording when a template is absent", () => {
     const notification = buildNotification(event(), "ACME", presentation({ templates: {} }));
-    expect(notification?.title).toBe("Acme · Approval needed");
-    expect(notification?.body).toBe("A request is waiting for a decision.");
+    expect(notification?.title).toBe("Approval: Acme | A request is waiting");
+    expect(notification?.body).toBe("");
   });
 
   it("leaves a custom title exactly as written, without the organization prefix", () => {
@@ -438,10 +439,10 @@ describe("buildNotification with configured text", () => {
       presentation(),
       { agentName: "CodexCoder" },
     );
-    expect(failed?.title).toBe("Acme · CodexCoder run failed");
+    expect(failed?.title).toBe("Run failed: Acme | CodexCoder · run 12345678");
 
-    expect(buildNotification(event(), "ACME", presentation(), { agentName: "CodexCoder" })?.body).toBe(
-      "CodexCoder requested a request and is waiting for a decision.",
+    expect(buildNotification(event(), "ACME", presentation(), { agentName: "CodexCoder" })?.title).toBe(
+      "Approval: Acme | CodexCoder waiting for a decision",
     );
   });
 
@@ -465,9 +466,9 @@ describe("buildNotification with configured text", () => {
   });
 
   it("previews the built-in wording for the settings page", () => {
-    expect(previewDefaults("approval.created")).toEqual({
-      title: "Approval needed",
-      body: "A request is waiting for a decision.",
+    expect(previewDefaults("approval.created", {}, "Acme")).toEqual({
+      title: "Approval: Acme | A request is waiting",
+      body: "",
     });
   });
 });
@@ -486,8 +487,7 @@ describe("where event fields are read from", () => {
       }),
       "ACME",
     );
-    expect(created?.title).toBe("New task ACME-42");
-    expect(created?.body).toBe("Ship the release");
+    expect(created?.title).toBe("New task | ACME-42 · Ship the release");
   });
 
   it("resolves the approval type from the flat payload", () => {
@@ -495,8 +495,8 @@ describe("where event fields are read from", () => {
       event({ eventType: "approval.created", payload: { type: "hire_agent", issueIds: [] } }),
       "ACME",
     );
-    expect(approval?.title).toBe("Approval needed");
-    expect(approval?.body).toBe("A hire agent is waiting for a decision.");
+    expect(approval?.title).toBe("Approval | A hire agent is waiting");
+    expect(approval?.body).toBe("");
   });
 
   it("resolves a template object that only exists in the flat payload", () => {
@@ -513,14 +513,14 @@ describe("where event fields are read from", () => {
       event({ eventType: "issue.created", payload: { details: { identifier: "ACME-7", title: "Nested" } } }),
       "ACME",
     );
-    expect(nested?.title).toBe("New task ACME-7");
-    expect(nested?.body).toBe("Nested");
+    expect(nested?.title).toBe("New task | ACME-7 · Nested");
+    expect(nested?.body).toBe("");
   });
 
   it("falls back to the generic wording when the event carries nothing", () => {
     const bare = buildNotification(event({ eventType: "issue.created", payload: {} }), "ACME");
-    expect(bare?.title).toBe("New task");
-    expect(bare?.body).toBe("A task was created.");
+    expect(bare?.title).toBe("New task | A task was created");
+    expect(bare?.body).toBe("");
   });
 });
 
@@ -565,6 +565,42 @@ describe("acronymOf", () => {
     expect(acronymOf(undefined)).toBeNull();
     expect(acronymOf("   ")).toBeNull();
     expect(acronymOf("...")).toBeNull();
+  });
+});
+
+describe("the built-in notification line", () => {
+  it("reads <what happened>: <ORG> | <the specifics>", () => {
+    expect(notificationTitle("approval.created", "SAK", "CodexCoder waiting for a decision")).toBe(
+      "Approval: SAK | CodexCoder waiting for a decision",
+    );
+  });
+
+  it("leaves out the organization segment when there is none", () => {
+    expect(notificationTitle("approval.created", null, "CodexCoder waiting for a decision")).toBe(
+      "Approval | CodexCoder waiting for a decision",
+    );
+    expect(notificationTitle("issue.created", "", "A task was created")).toBe(
+      "New task | A task was created",
+    );
+  });
+
+  it("is one line: every built-in body is empty", () => {
+    // The line carries everything, so a body only exists when an operator writes
+    // one. A non-empty built-in body would be a second line nobody asked for.
+    for (const type of NOTIFIABLE_EVENT_TYPES) {
+      expect(previewDefaults(type, {}, "SAK").body).toBe("");
+      expect(notificationTitle(type, "SAK", "").startsWith(EVENT_TYPE_LABELS[type])).toBe(true);
+    }
+  });
+
+  it("says the specifics without restating the label", () => {
+    // "Run failed: SAK | CodexCoder · run 1234" rather than "... run failed".
+    for (const type of NOTIFIABLE_EVENT_TYPES) {
+      const draft = previewDefaults(type, { agentName: "CodexCoder" }, "SAK");
+      const labelIndex = draft.title.indexOf(EVENT_TYPE_LABELS[type]);
+      expect(labelIndex).toBe(0);
+      expect(draft.title.slice(EVENT_TYPE_LABELS[type].length)).not.toContain(EVENT_TYPE_LABELS[type]);
+    }
   });
 });
 

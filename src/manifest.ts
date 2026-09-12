@@ -10,7 +10,7 @@ import { DEFAULT_EVENT_TYPES, NOTIFIABLE_EVENT_TYPES } from "./notifications.js"
 const manifest: PaperclipPluginManifestV1 = {
   id: "conreo.webpush",
   apiVersion: 1,
-  version: "0.12.0",
+  version: "0.13.0",
   displayName: "Web Push Notifications",
   description: "Desktop and Android push notifications for Paperclip board events.",
   author: "conreo",

@@ -64,16 +64,17 @@ try {
   // Assert the *identifier*, not just the trigger's generic prefix: the built-in
   // wording falls back to "New task", so a check that only matched "New task..."
   // passed while every field taken from the activity detail was silently empty.
-  // The built-in wording is prefixed with the organization's name, so match the
-  // part that proves the event's own data resolved.
+  // The built-in line is "<what happened>: <ORG> | <the specifics>", so this asserts
+  // the shape *and* that the event's own data reached it — the identifier and the
+  // task title were both silently empty once, while a check for the generic prefix
+  // still passed.
   const identifier = created.identifier ?? null;
-  const expectedTitle = identifier ? `New task ${identifier}` : null;
-  console.log(`expecting a title ending ${JSON.stringify(expectedTitle)}`);
+  const expectedShape = identifier ? new RegExp(`^New task: [A-Z0-9]+ \\| ${identifier} · `) : /^New task: /;
+  console.log(`expecting a title matching ${expectedShape}`);
 
   const pushed = await waitForPushedMessage(
     page,
-    (payload) =>
-      expectedTitle ? payload.title.endsWith(expectedTitle) : payload.title.startsWith("New task"),
+    (payload) => expectedShape.test(payload.title) && payload.title.includes(title),
     90000,
   );
   if (pushed.miss) {
@@ -91,12 +92,13 @@ try {
         ? `deep link correct: ${pushed.url}`
         : `deep link mismatch: got ${pushed.url}, expected ${expected}`,
     );
+    // The task title lives in the one line now, not in a body.
     console.log(
-      pushed.body === title
-        ? `PASS: the notification carries the task title → ${JSON.stringify(pushed.body)}`
-        : `FAIL: body is ${JSON.stringify(pushed.body)}, expected ${JSON.stringify(title)}`,
+      pushed.title.includes(title)
+        ? `PASS: the line carries the task title → ${JSON.stringify(pushed.title)}`
+        : `FAIL: ${JSON.stringify(pushed.title)} does not carry ${JSON.stringify(title)}`,
     );
-    if (pushed.body !== title) process.exitCode = 1;
+    if (!pushed.title.includes(title)) process.exitCode = 1;
   }
 } finally {
   if (issueId) {

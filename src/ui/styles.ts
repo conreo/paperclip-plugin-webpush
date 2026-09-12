@@ -48,6 +48,39 @@ export const PLUGIN_STYLES = `
   display: flex; align-items: center; gap: 0.375rem;
   font-size: 0.75rem; line-height: 1rem; color: var(--muted-foreground);
 }
+
+/*
+ * The question mark beside a label, matching the host's hint affordance: a 12px mark
+ * opacity that darkens on hover, opening the explanation in a bubble.
+ *
+ * It is marked as an icon button because of the host's touch rule: under
+ * (pointer: coarse) every button is given a 44px floor, which is right for a
+ * lone action and wrong for a mark that sits inline with 12px text — the host
+ * exempts its own inline widgets the same way.
+ */
+.pcp-help {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 0.875rem; height: 0.875rem; padding: 0;
+  border: 0; border-radius: 9999px;
+  background: transparent;
+  color: color-mix(in oklab, var(--muted-foreground) 50%, transparent);
+  cursor: pointer;
+  transition: color 120ms;
+}
+.pcp-help:hover, .pcp-help[aria-expanded="true"] { color: var(--muted-foreground); }
+.pcp-help svg { width: 0.75rem; height: 0.75rem; }
+.pcp-help-bubble {
+  position: absolute; z-index: 30; top: calc(100% + 0.375rem); left: 0;
+  width: max-content; max-width: 18rem;
+  padding: 0.375rem 0.5rem;
+  background: var(--popover, var(--card));
+  color: var(--popover-foreground, var(--card-foreground));
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.14);
+  font-size: 0.75rem; line-height: 1rem; font-weight: 400;
+  text-align: left; white-space: normal;
+}
+.pcp-help-wrap { position: relative; display: inline-flex; align-items: center; }
 .pcp-actions { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
 
 .pcp-card {
@@ -141,65 +174,10 @@ export const PLUGIN_STYLES = `
 .pcp-switch[aria-checked="true"] .pcp-switch-thumb { translate: 1rem 0; }
 .dark .pcp-switch-thumb { background: var(--foreground); }
 
-/*
- * One trigger: a row you can scan, and an editor you open.
- *
- * Seven triggers with their fields laid out flat is ~1,600px of scrolling in which
- * the trigger's name, the field labels and the notification's own text were all
- * 12px — nothing showed where one trigger ended and the next began. The row
- * carries the name and a one-line preview, and the editor opens on demand, so the
- * whole section is scannable and the controls appear only where they are wanted.
- */
 .pcp-trigger { display: grid; border-top: 1px solid var(--border); }
 .pcp-trigger:first-of-type { border-top: 0; }
-
-/*
- * Three columns: the trigger's noun, what the notification will say, and its state.
- * The noun column is fixed so the summaries line up down the list; it ellipsises
- * rather than wrapping, because a wrapped name would break that alignment.
- */
-.pcp-trigger-row {
-  display: grid; grid-template-columns: minmax(5rem, 8.5rem) minmax(0, 1fr) auto auto;
-  align-items: center; gap: 0.625rem;
-  width: 100%; padding: 0.5rem 0.5rem;
-  border: 0; border-radius: var(--radius-md);
-  background: transparent; color: inherit;
-  font-family: inherit; text-align: left; cursor: pointer;
-  transition: background-color 120ms;
-}
-.pcp-trigger-row:hover { background: color-mix(in oklab, var(--muted-foreground) 8%, transparent); }
-.pcp-trigger-row:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 50%, transparent);
-}
-.pcp-trigger-name {
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-size: 0.8125rem; line-height: 1.125rem; font-weight: 500; color: var(--foreground);
-}
-.pcp-trigger-summary {
-  display: flex; align-items: center; gap: 0.375rem;
-  min-width: 0;
-  font-size: 0.75rem; line-height: 1rem; color: var(--muted-foreground);
-}
-.pcp-trigger-summary > span:last-child {
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-/*
- * The organization's acronym, the same token its task ids carry. Deliberately
- * neutral rather than tinted like an object chip: in a row it labels the list, it
- * is not something you can insert.
- */
-.pcp-acronym {
-  flex: 0 0 auto;
-  padding: 0 0.25rem;
-  border-radius: 0.25rem;
-  background: color-mix(in oklab, var(--muted-foreground) 14%, transparent);
-  color: var(--foreground);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.6875rem; line-height: 1rem;
-  letter-spacing: 0.02em;
-}
-/* A dot, not the word: the state is a detail, and the word cost the row its fit. */
+.pcp-trigger > .pcp-toggle-row { padding: 0.5rem 0.25rem; }
+/* A dot, not the word "Customised": the state is a detail, and the row is a row. */
 .pcp-dot {
   flex: 0 0 auto;
   width: 0.375rem; height: 0.375rem;
@@ -236,10 +214,10 @@ export const PLUGIN_STYLES = `
 .pcp-notification-time { margin-left: auto; }
 .pcp-notification-icon {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 1rem; height: 1rem; border-radius: 0.25rem;
+  width: 1.125rem; height: 1.125rem; border-radius: 0.3125rem;
   background: color-mix(in oklab, var(--primary) 12%, transparent); color: var(--foreground);
 }
-.pcp-notification-icon svg { width: 0.6875rem; height: 0.6875rem; }
+.pcp-notification-icon svg { width: 0.75rem; height: 0.75rem; }
 .pcp-notification-title { font-size: 0.875rem; line-height: 1.25rem; font-weight: 600; }
 .pcp-notification-body { font-size: 0.8125rem; line-height: 1.25rem; color: var(--muted-foreground); }
 

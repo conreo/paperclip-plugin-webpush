@@ -224,31 +224,39 @@ plugin-owned state, could be written by any board member through a plugin action
 The settings page reads them back through the worker, so a saved change is visible
 immediately and applies to browsers enabled from then on.
 
-**Notification wording** is editable in the same section. Each trigger is a row — its noun,
-the organization's acronym, and the body of the message — and opening a row reveals its
-title and body, each composed of text and **objects**, plus a preview of the message. An
-empty field keeps the built-in wording, which the field shows as its placeholder.
+**Notification wording** is editable in the same section. It opens with one example of what
+a notification looks like, then a row per trigger in the host's own shape — the noun, a `?`
+that explains it, and one control. Opening a trigger reveals its title and body, each
+composed of text and **objects**; an empty field keeps the built-in wording, which the field
+shows as its placeholder.
 
-The rows are shaped around what a notification does not need to repeat:
+The built-in message is **one line**: `<what happened>: <ORG> | <specifics>`, for example
 
-- **The trigger is a noun.** `Approval`, `Task assigned`, `Run failed`, `Budget`,
-  `New task`, `Decision`, `Decision overdue`. Sentence labels ("An approval is waiting for
-  a decision") were the first of three statements of the same fact, since the notification
-  below them said it again. The sentence is kept as the row's tooltip.
-- **The row shows the body, not the title.** The title restates the trigger (`Approval
-  needed` under `Approval`); the body is the part that differs. The title takes over only
-  when there is no body to show.
-- **The organization is an acronym.** Rows carry `SAK`, not the company name, and so do
-  the notifications themselves: `SAK · Approval needed`. It is the company's issue prefix —
-  the token its task ids are built from — so it is shorter on a lock screen *and* familiar.
-  A company without one falls back to its name, then to initials derived from the name.
-  The same token is what `{{org}}` places in a message.
-- **Customised is a dot**, not a word, which is what let the row fit on one line.
+    Approval: SAK | CodexCoder waiting for a decision
+    New task: SAK | SAK-42 · Ship the release
+    Run failed: SAK | CodexCoder · run 12345678
 
-A row is 34px, so all seven fit in ~240px. The preview is drawn as the thing it becomes —
-app icon, `Paperclip`, the title at 14px semibold, the body under it — rather than two lines
-of muted text under a heading, which reads as help text and leaves you guessing which line
-is the title.
+A push shows one line before it is expanded, so the line carries everything and a body
+exists only if an operator writes one. The specifics never restate the label — "Run failed"
+is followed by who and which run, not by "run failed" again — and the organization is placed
+by that format rather than by a prefix added afterwards, which removes the old rule about
+when a prefix applies (and any way to end up with the name twice).
+
+Two further choices keep the section short:
+
+- **The trigger is a noun.** `Approval`, `Task assigned`, `Run failed`, `Budget`, `New task`,
+  `Decision`, `Decision overdue`. Sentence labels ("An approval is waiting for a decision")
+  repeated the notification's own wording, seven times, above the notification. The sentence
+  is what the `?` explains.
+- **The organization is an acronym.** It is the company's issue prefix — the token its task
+  ids are built from — so it is shorter on a lock screen *and* familiar. A company without
+  one falls back to its name, then to initials derived from it. The same token is what
+  `{{org}}` places in a message.
+- **Customised is a dot**, not a word.
+
+The example is drawn as the thing it becomes — app icon, `Paperclip`, `now`, the title at
+14px semibold — rather than as lines of muted text under a heading, which reads as help text.
+There is one of them, following whichever trigger is open.
 
 An object is the value from the event — the organization, the agent, the task
 identifier, the task title, the approval type, the budget scope, the failed run. You do
@@ -515,6 +523,8 @@ SPIKE_OTHER_COMPANY_ID=<id> SPIKE_OTHER_PREFIX=<PFX> \
 node scripts/e2e-config.mjs     # saves organization defaults, reloads, and proves a new browser uses them
 node scripts/e2e-template.mjs   # composes a message from objects, reorders it, saves, reloads, and
                                 # expects a real approval to arrive with exactly that wording
+node scripts/e2e-touch.mjs      # opens the page on a coarse pointer and requires the switch, icon
+                                # buttons and chips to keep their design sizes
 ```
 
 Overrides: `SPIKE_BASE_URL`, `SPIKE_COMPANY_PREFIX`, `SPIKE_COMPANY_ID`,
@@ -546,6 +556,12 @@ debugging time:
   profile, so only a fresh profile exercises the path a new operator takes. This is
   what surfaced the service-worker activation race that made the very first
   *Enable* click fail.
+- **Mark small controls with the host's `data-slot`.** The host gives every `button` a 44px
+  minimum height under `(pointer: coarse)` and exempts its own inline widgets by slot, with
+  the note that the surrounding row provides the touch area. A plugin control written as a
+  plain button inherits the 44px floor: on a tablet the switch drew a 44px capsule around a
+  16px thumb, every icon button stretched, and an object chip — which is not a button at all
+  and must not claim to be one — drew as a tall block. `e2e-touch.mjs` exists to catch that.
 - **Expect the throttle.** More than 12 pushes to one device in 5 minutes are
   suppressed and recorded as `throttled`; `explainMiss()` reports that instead of
   leaving it looking like a delivery failure. Repeated runs against one profile hit this

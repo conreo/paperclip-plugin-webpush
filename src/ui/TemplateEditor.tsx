@@ -55,8 +55,11 @@ function chipElement(name: TemplateObject): HTMLElement {
   // never wrote.
   chip.contentEditable = "false";
   chip.spellcheck = false;
-  chip.setAttribute("role", "button");
-  chip.setAttribute("aria-label", `Object {{${name}}}`);
+  // Deliberately no role="button": the chip *contains* buttons, and a button inside
+  // a button is invalid. It also picked up the host's coarse-pointer rule, which
+  // floors anything with role="button" at 44px — on a tablet a chip drew as a tall
+  // block instead of a word in a sentence. The chip's own controls carry the labels.
+
 
   const label = document.createElement("span");
   label.className = "pcp-object-label";
@@ -73,6 +76,10 @@ function chipElement(name: TemplateObject): HTMLElement {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "pcp-object-tool";
+    // Same reason as the switch: the host's coarse-pointer rule floors every
+    // button at 44px, which would turn a chunk of a message into a stack of
+    // tall buttons on a tablet. The chip's row provides the touch area.
+    button.dataset.slot = "icon-button";
     button.dataset.action = action;
     button.setAttribute("aria-label", title);
     button.title = title;
@@ -331,6 +338,7 @@ export function TemplateEditor({ value, objects, builtIn, onChange, testId, aria
         <button
           type="button"
           className="pcp-insert-btn"
+          data-slot="icon-button"
           aria-label="Insert an object"
           aria-expanded={menuOpen}
           title="Insert an object"
