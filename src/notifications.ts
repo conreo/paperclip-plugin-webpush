@@ -201,7 +201,7 @@ export const TEMPLATE_OBJECT_HINTS: Record<TemplateObject, string> = {
  * as nothing, which is why the editor only offers these.
  */
 export const TEMPLATE_PLACEHOLDERS: Record<NotifiableEventType, TemplateObject[]> = {
-  "decision.created": [],
+  "decision.created": ["identifier", "title"],
   "decision.expired": [],
   "approval.created": ["type"],
   "issue.assignment_wakeup_requested": ["identifier"],
@@ -407,15 +407,22 @@ function draftFor(
   // scaffolding. The specifics also never restate the label — "Run failed" is
   // followed by who and which run, not by "run failed" again.
   switch (eventType) {
-    case "decision.created":
-      // The payload carries the origin (issue, agent, responsible user) but no
-      // decision title, so the line stays generic and the link goes to the desk
-      // where the choice is actually made.
+    case "decision.created": {
+      // A decision request names the work when the host publishes the issue it is
+      // about. Requests raised through the decisions desk carry `identifier` and
+      // `title`; a host that sends neither, and the decision-entity path, leave both
+      // null, so the line falls back to who is waiting rather than to an empty slot.
+      const identifierValue = payloadField(payload, "identifier");
+      const identifier = typeof identifierValue === "string" ? identifierValue : null;
+      const titleValue = payloadField(payload, "title");
+      const issueTitle = typeof titleValue === "string" ? titleValue : null;
+      const subject = [identifier, issueTitle].filter(Boolean).join(" · ");
       return {
-        detail: agentName ? `${agentName} needs your choice` : "Waiting for your choice",
+        detail: subject || (agentName ? `${agentName} needs your choice` : "Waiting for your choice"),
         url: link(companyPrefix, "/decisions"),
-        vars: { agent: agentName },
+        vars: { agent: agentName, identifier, title: issueTitle },
       };
+    }
     case "decision.expired":
       return {
         detail: "Passed its decide-by date",

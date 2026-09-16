@@ -99,6 +99,43 @@ describe("decision notifications", () => {
     });
   });
 
+  it("names the work when the request carries the issue it is about", () => {
+    const notification = buildNotification(
+      event({
+        eventType: "decision.created",
+        entityId: "decision-3",
+        entityType: "decision",
+        payload: {
+          details: {
+            seedKey: "questions",
+            sourceKind: "issue_thread_interaction",
+            issueId: "issue-9",
+            identifier: "ACME-42",
+            title: "Ship the release",
+          },
+        },
+      }),
+      "ACME",
+    );
+    expect(notification?.title).toBe("Decision | ACME-42 · Ship the release");
+    expect(notification?.url).toBe("/ACME/decisions");
+  });
+
+  it("keeps the waiting line when the request carries no issue", () => {
+    // A host that sends no identifier, and the decision-entity path, must not
+    // produce an empty slot after the separator.
+    const notification = buildNotification(
+      event({
+        eventType: "decision.created",
+        entityId: "decision-4",
+        entityType: "decision",
+        payload: { details: {} },
+      }),
+      "ACME",
+    );
+    expect(notification?.title).toBe("Decision | Waiting for your choice");
+  });
+
   it("flags a decision that passed its decide-by date", () => {
     const notification = buildNotification(
       event({ eventType: "decision.expired", entityId: "decision-2", entityType: "decision" }),
@@ -641,7 +678,7 @@ describe("template objects", () => {
   it("offers each trigger the objects it actually has, and always org and agent", () => {
     expect(templateObjectsFor("approval.created")).toEqual(["org", "agent", "type"]);
     expect(templateObjectsFor("issue.created")).toEqual(["org", "agent", "identifier", "title"]);
-    expect(templateObjectsFor("decision.created")).toEqual(["org", "agent"]);
+    expect(templateObjectsFor("decision.created")).toEqual(["org", "agent", "identifier", "title"]);
   });
 
   it("describes every object it offers", () => {
