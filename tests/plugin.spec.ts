@@ -62,4 +62,15 @@ describe("push service worker", () => {
     // worker lives under /_plugins/<id>/ui/ and must stay a pure push receiver.
     expect(swSource).not.toContain('addEventListener("fetch"');
   });
+
+  it("does not send a notification icon or badge", () => {
+    // The board is installed as an app, so the platform takes both from the
+    // app's own icon. An `icon` here replaced it with the 192px page icon and a
+    // `badge` replaced it with a 32px favicon — visible downgrades on a device
+    // that already has the right artwork, and drawn in the status bar.
+    const showNotification =
+      swSource.slice(swSource.indexOf("showNotification("), swSource.indexOf("notificationclick"));
+    expect(showNotification).not.toMatch(/\bicon\s*:/);
+    expect(showNotification).not.toMatch(/\bbadge\s*:/);
+  });
 });

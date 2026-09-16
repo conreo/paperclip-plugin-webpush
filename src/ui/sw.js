@@ -12,7 +12,7 @@
  *  - It coexists with that root worker rather than replacing it.
  */
 
-const SW_BUILD_ID = "0.2.0";
+const SW_BUILD_ID = "0.2.1";
 
 self.addEventListener("install", () => {
   // No precaching to do: this worker is a push receiver, not an offline cache.
@@ -76,8 +76,10 @@ self.addEventListener("push", (event) => {
         body,
         tag: payload.tag || payload.eventId || undefined,
         data: { url: payload.url || "/" },
-        icon: payload.icon || "/android-chrome-192x192.png",
-        badge: payload.badge || "/favicon-32x32.png",
+        // No `icon` and no `badge`. The board is installed as an app, and the
+        // platform already draws both from the app's own icon. Sending one here
+        // replaced that with a 192px page icon, and a 32px favicon as the
+        // status-bar badge, which is the one thing an installed app must not do.
       });
     })(),
   );
