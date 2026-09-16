@@ -1,0 +1,52 @@
+name: CI
+
+# Every push to main and every pull request typechecks, builds and tests the
+# plugin, and holds the dependency line at "no high or critical advisories".
+# Publishing runs the same build and test through `prepublishOnly`; this is what
+# runs before that, on every change, so a broken main is caught where it breaks.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The job only reads the tree; nothing should leave a token behind.
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 9
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Build
+        run: pnpm build
+
+      - name: Test
+        run: pnpm test
+
+      - name: Audit dependencies
+        # The build and test toolchain carries low and moderate advisories today
+        # (esbuild, vitest). None of them ship: the published tarball is dist/
+        # and migrations/ only. Holding the line at high keeps this gate
+        # meaningful instead of red from the first run, while Dependabot works
+        # through the rest.
+        run: pnpm audit --audit-level=high

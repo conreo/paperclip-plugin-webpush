@@ -1,0 +1,21 @@
+version: 2
+updates:
+  # The plugin's dependencies, including the build and test toolchain. Grouped,
+  # so a week of patch bumps arrives as one pull request instead of a dozen.
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      development-dependencies:
+        dependency-type: development
+      production-dependencies:
+        dependency-type: production
+
+  # The actions pinned in .github/workflows, which are pinned by commit SHA and
+  # would otherwise never move.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
